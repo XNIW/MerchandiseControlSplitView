@@ -71,6 +71,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -100,6 +101,8 @@ import com.example.merchandisecontrolsplitview.util.canonicalExcelHeaderKey
 import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
+import com.example.merchandisecontrolsplitview.viewmodel.ExcelImportDraftState
+import com.example.merchandisecontrolsplitview.viewmodel.LocalBusinessPresentationKey
 import com.example.merchandisecontrolsplitview.viewmodel.UiState
 import kotlinx.coroutines.launch
 import java.text.Normalizer
@@ -202,11 +205,37 @@ fun PreGenerateScreen(
     onGenerate: (String, String) -> Unit,
     onBack: () -> Unit
 ) {
-    val excelData = excelViewModel.excelData
-    val selectedColumns = excelViewModel.selectedColumns
-    val isExcelLoading by excelViewModel.isLoading
-    val excelProgress by excelViewModel.loadingProgress
-    val excelLoadError by excelViewModel.loadError
+    PreGenerateDraftScreen(
+        draft = excelViewModel.importDraftState,
+        databaseUiState = databaseUiState,
+        databaseViewModel = databaseViewModel,
+        canReadBusiness = true,
+        canWriteBusiness = true,
+        onPrepareDraftReset = { excelViewModel.resetState() },
+        onGenerate = onGenerate,
+        onBack = onBack
+    )
+}
+
+/** One RAM presentation identity across business-store opening and admission. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun PreGenerateDraftScreen(
+    draft: ExcelImportDraftState,
+    databaseUiState: UiState?,
+    databaseViewModel: DatabaseViewModel?,
+    canReadBusiness: Boolean,
+    canWriteBusiness: Boolean,
+    onPrepareDraftReset: () -> Unit,
+    onGenerate: (String, String) -> Unit,
+    onBack: () -> Unit,
+    businessPresentationKey: LocalBusinessPresentationKey? = null
+) {
+    val excelData = draft.excelData
+    val selectedColumns = draft.selectedColumns
+    val isExcelLoading by draft.isLoading
+    val excelProgress by draft.loadingProgress
+    val excelLoadError by draft.loadError
 
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -220,21 +249,78 @@ fun PreGenerateScreen(
     var databaseLoadingTimedOut by remember { mutableStateOf(false) }
     var resetInlineSelectionsOnNextDataset by remember { mutableStateOf(true) }
 
-    val supplierInputText by databaseViewModel.supplierInputText.collectAsState()
     var selectedSupplier by remember { mutableStateOf<Supplier?>(null) }
-    var acceptedPendingSupplierKey by remember { mutableStateOf<String?>(null) }
-    var isSupplierDropdownExpanded by remember { mutableStateOf(false) }
-    val supplierSuggestions by databaseViewModel.suppliers.collectAsState()
-
-    val categoryInputText by databaseViewModel.categoryInputText.collectAsState()
     var selectedCategory by remember { mutableStateOf<Category?>(null) }
+    var acceptedPendingSupplierKey by remember { mutableStateOf<String?>(null) }
     var acceptedPendingCategoryKey by remember { mutableStateOf<String?>(null) }
+    var isSupplierDropdownExpanded by remember { mutableStateOf(false) }
     var isCategoryDropdownExpanded by remember { mutableStateOf(false) }
-    val categorySuggestions by databaseViewModel.categories.collectAsState()
+    var supplierQueryFromSuggestion by remember { mutableStateOf(false) }
+    var categoryQueryFromSuggestion by remember { mutableStateOf(false) }
+    var lastNonNullAdmittedKey by remember { mutableStateOf<LocalBusinessPresentationKey?>(null) }
+    var lastReadableDatabase by remember { mutableStateOf<DatabaseViewModel?>(null) }
+    var hasAdmittedBusiness by remember { mutableStateOf(false) }
+
+    // A key describes presentation identity only: it never grants admission.
+    val presentationChanged = hasAdmittedBusiness && (
+        databaseViewModel == null || lastReadableDatabase !== databaseViewModel ||
+            (lastNonNullAdmittedKey != null && businessPresentationKey != lastNonNullAdmittedKey)
+        )
+    val canUseBusinessRead = canReadBusiness && databaseViewModel != null && !presentationChanged
+    val canUseBusinessWrite = canWriteBusiness && canUseBusinessRead
+    val readableDatabase = databaseViewModel?.takeIf { canUseBusinessRead }
+    val latestReadableDatabase by rememberUpdatedState(readableDatabase)
+    val latestCanWriteBusiness by rememberUpdatedState(canUseBusinessWrite)
+    val latestBusinessKey by rememberUpdatedState(businessPresentationKey)
+
+    // Mask withdrawn DB-derived names immediately; effect cleanup then updates
+    // RAM. Text the user typed independently remains an unbound file draft.
+    val supplierInputText = if (!canUseBusinessRead && supplierQueryFromSuggestion) "" else draft.supplierQuery.value
+    val categoryInputText = if (!canUseBusinessRead && categoryQueryFromSuggestion) "" else draft.categoryQuery.value
+    val supplierSuggestions: List<Supplier> = if (readableDatabase != null) {
+        val values by readableDatabase.suppliers.collectAsState()
+        values
+    } else emptyList()
+    val categorySuggestions: List<Category> = if (readableDatabase != null) {
+        val values by readableDatabase.categories.collectAsState()
+        values
+    } else emptyList()
+
+    LaunchedEffect(canReadBusiness, databaseViewModel, businessPresentationKey) {
+        if (presentationChanged) {
+            if (supplierQueryFromSuggestion) draft.supplierQuery.value = ""
+            if (categoryQueryFromSuggestion) draft.categoryQuery.value = ""
+            selectedSupplier = null
+            selectedCategory = null
+            acceptedPendingSupplierKey = null
+            acceptedPendingCategoryKey = null
+            isSupplierDropdownExpanded = false
+            isCategoryDropdownExpanded = false
+            supplierQueryFromSuggestion = false
+            categoryQueryFromSuggestion = false
+        }
+        if (canReadBusiness && databaseViewModel != null) {
+            hasAdmittedBusiness = true
+            lastReadableDatabase = databaseViewModel
+            if (businessPresentationKey != null) lastNonNullAdmittedKey = businessPresentationKey
+        }
+    }
+    LaunchedEffect(readableDatabase, supplierInputText) {
+        if (readableDatabase != null && latestReadableDatabase === readableDatabase) {
+            readableDatabase.onSupplierSearchQueryChanged(supplierInputText)
+        }
+    }
+    LaunchedEffect(readableDatabase, categoryInputText) {
+        if (readableDatabase != null && latestReadableDatabase === readableDatabase) {
+            readableDatabase.onCategorySearchQueryChanged(categoryInputText)
+        }
+    }
 
     fun clearInlineSelections() {
-        databaseViewModel.onSupplierSearchQueryChanged("")
-        databaseViewModel.onCategorySearchQueryChanged("")
+        draft.supplierQuery.value = ""
+        draft.categoryQuery.value = ""
+        supplierQueryFromSuggestion = false
+        categoryQueryFromSuggestion = false
         selectedSupplier = null
         selectedCategory = null
         acceptedPendingSupplierKey = null
@@ -248,8 +334,9 @@ fun PreGenerateScreen(
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
             resetInlineSelectionsOnNextDataset = true
-            excelViewModel.resetState()
-            excelViewModel.loadFromMultipleUris(context, uris)
+            onPrepareDraftReset()
+            draft.resetState()
+            draft.loadFromMultipleUris(context, uris)
         }
     }
 
@@ -257,7 +344,7 @@ fun PreGenerateScreen(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
         if (uris.isNotEmpty()) {
-            excelViewModel.appendFromMultipleUris(context, uris)
+            draft.appendFromMultipleUris(context, uris)
         }
     }
 
@@ -267,14 +354,14 @@ fun PreGenerateScreen(
         WindowInsets.navigationBars.getBottom(this).toDp()
     }
 
-    val isDatabaseLoading = databaseUiState is UiState.Loading
+    val isDatabaseLoading = canUseBusinessRead && databaseUiState is UiState.Loading
     val showExcelLoadingDialog = isExcelLoading && !excelLoadingTimedOut
     val showDatabaseLoadingDialog = isDatabaseLoading && !databaseLoadingTimedOut
-    val analysisError = (databaseUiState as? UiState.Error)?.message
+    val analysisError = (databaseUiState as? UiState.Error)?.message?.takeIf { canUseBusinessRead }
 
     val headers = excelData.firstOrNull()?.toList().orEmpty()
-    val headerTypes = excelViewModel.headerTypes.toList()
-    val originalHeaders = excelViewModel.originalHeaders.toList()
+    val headerTypes = draft.headerTypes.toList()
+    val originalHeaders = draft.originalHeaders.toList()
     val dataRows = excelData.drop(1)
     val totalDataRows = (excelData.size - 1).coerceAtLeast(0)
     val previewVisibleRows = min(totalDataRows, PRE_GENERATE_PREVIEW_ROW_LIMIT)
@@ -312,7 +399,7 @@ fun PreGenerateScreen(
             fileHeader = fileHeader,
             examples = buildColumnExamples(dataRows, index),
             isSelected = selectedColumns.getOrNull(index) == true,
-            isEssential = excelViewModel.isColumnEssential(index),
+            isEssential = draft.isColumnEssential(index),
             status = status
         )
     }
@@ -324,36 +411,36 @@ fun PreGenerateScreen(
     val canSelectAllOptionalColumns by remember {
         derivedStateOf {
             selectedColumns.indices.any { index ->
-                !selectedColumns[index] && !excelViewModel.isColumnEssential(index)
+                !selectedColumns[index] && !draft.isColumnEssential(index)
             }
         }
     }
     val hasOptionalColumnsSelected by remember {
         derivedStateOf {
             selectedColumns.indices.any { index ->
-                selectedColumns[index] && !excelViewModel.isColumnEssential(index)
+                selectedColumns[index] && !draft.isColumnEssential(index)
             }
         }
     }
 
     val dataQualitySummary by remember {
-        derivedStateOf { excelViewModel.getPreGenerateDataQualitySummary() }
+        derivedStateOf { draft.getPreGenerateDataQualitySummary() }
     }
 
     val missingEssentialColumns = setOf("barcode", "productName", "purchasePrice")
         .filterNot { headers.contains(it) }
     val supplierResolution = resolvePreGenerateEntityResolution(
         inputText = supplierInputText,
-        selectedName = selectedSupplier?.name,
+        selectedName = selectedSupplier?.name?.takeIf { canUseBusinessRead },
         existingNames = supplierSuggestions.map { it.name }
     )
     val categoryResolution = resolvePreGenerateEntityResolution(
         inputText = categoryInputText,
-        selectedName = selectedCategory?.name,
+        selectedName = selectedCategory?.name?.takeIf { canUseBusinessRead },
         existingNames = categorySuggestions.map { it.name }
     )
     val isGenerateEnabled =
-        supplierResolution.isValid &&
+        canUseBusinessWrite && supplierResolution.isValid &&
             categoryResolution.isValid &&
             missingEssentialColumns.isEmpty()
     val isSupplierPendingAccepted = supplierResolution.isPendingCreate &&
@@ -362,6 +449,8 @@ fun PreGenerateScreen(
         categoryResolution.displayName?.let { normalizedPreGenerateRelationKey(it) } == acceptedPendingCategoryKey
 
     val generateDisabledReason = when {
+        !canUseBusinessRead -> stringResource(R.string.business_scope_checking)
+        !canUseBusinessWrite -> stringResource(R.string.storefront_permission_denied)
         missingEssentialColumns.isNotEmpty() -> stringResource(
             R.string.error_missing_essential_columns_prompt,
             missingEssentialColumns.joinToString { getLocalizedHeader(context, it) }
@@ -481,15 +570,16 @@ fun PreGenerateScreen(
                             ),
                             onSafetyTimeout = {
                                 excelLoadingTimedOut = true
-                                excelViewModel.resetState()
+                                onPrepareDraftReset()
+                                draft.resetState()
                             }
                         )
 
                         showDatabaseLoadingDialog -> LoadingDialog(
-                            loading = databaseUiState,
+                            loading = (databaseUiState as? UiState.Loading) ?: UiState.Loading(),
                             onSafetyTimeout = {
                                 databaseLoadingTimedOut = true
-                                databaseViewModel.consumeUiState()
+                                latestReadableDatabase?.consumeUiState()
                             }
                         )
                     }
@@ -556,19 +646,19 @@ fun PreGenerateScreen(
                                 columns = columnUiModels,
                                 canSelectAll = canSelectAllOptionalColumns,
                                 canKeepOnlyRequired = hasOptionalColumnsSelected,
-                                onSelectAll = { excelViewModel.toggleSelectAll() },
+                                onSelectAll = { draft.toggleSelectAll() },
                                 onKeepOnlyRequired = {
                                     // toggleSelectAll semantics: any-unselected→select-all, all-selected→deselect-all.
                                     // To land in "only required" we need the deselect-all path.
                                     // If some optional columns are not yet selected, normalise to
                                     // "all selected" first, then the second call deselects all optional.
                                     if (canSelectAllOptionalColumns) {
-                                        excelViewModel.toggleSelectAll()
+                                        draft.toggleSelectAll()
                                     }
-                                    excelViewModel.toggleSelectAll()
+                                    draft.toggleSelectAll()
                                 },
                                 onToggleSelection = { index ->
-                                    excelViewModel.toggleColumnSelection(index)
+                                    draft.toggleColumnSelection(index)
                                 },
                                 onEditType = { index -> headerDialogIndex = index }
                             )
@@ -580,14 +670,14 @@ fun PreGenerateScreen(
                                 supportingText = stringResource(R.string.pre_generate_supplier_section_supporting),
                                 placeholder = stringResource(R.string.search_or_add_supplier),
                                 inputText = supplierInputText,
-                                expanded = isSupplierDropdownExpanded,
+                                expanded = isSupplierDropdownExpanded && canUseBusinessRead,
                                 suggestions = supplierSuggestions,
                                 isExistingSelection = supplierResolution.isExisting,
                                 isValidForGenerate = supplierResolution.isValid,
                                 isPendingCreate = supplierResolution.isPendingCreate,
                                 isPendingCreateAccepted = isSupplierPendingAccepted,
                                 statusMessage = supplierStatusMessage,
-                                createPrompt = if (supplierResolution.isPendingCreate) {
+                                createPrompt = if (canUseBusinessWrite && supplierResolution.isPendingCreate) {
                                     stringResource(
                                         R.string.add_new_supplier_prompt,
                                         supplierResolution.displayName.orEmpty()
@@ -599,15 +689,19 @@ fun PreGenerateScreen(
                                 onInputChange = {
                                     selectedSupplier = null
                                     acceptedPendingSupplierKey = null
-                                    databaseViewModel.onSupplierSearchQueryChanged(it)
+                                    supplierQueryFromSuggestion = false
+                                    draft.supplierQuery.value = it
                                 },
-                                onSuggestionSelected = { suggestion ->
+                                onSuggestionSelected = selection@ { suggestion ->
                                     acceptedPendingSupplierKey = null
-                                    databaseViewModel.onSupplierSearchQueryChanged(suggestion.name)
+                                    if (latestReadableDatabase == null) return@selection
+                                    supplierQueryFromSuggestion = true
+                                    draft.supplierQuery.value = suggestion.name
                                     selectedSupplier = suggestion
                                     isSupplierDropdownExpanded = false
                                 },
-                                onCreateRequested = {
+                                onCreateRequested = create@ {
+                                    if (!latestCanWriteBusiness || latestReadableDatabase == null) return@create
                                     acceptedPendingSupplierKey = supplierResolution.displayName
                                         ?.let { normalizedPreGenerateRelationKey(it) }
                                     isSupplierDropdownExpanded = false
@@ -622,14 +716,14 @@ fun PreGenerateScreen(
                                 supportingText = stringResource(R.string.pre_generate_category_section_supporting),
                                 placeholder = stringResource(R.string.search_or_add_category),
                                 inputText = categoryInputText,
-                                expanded = isCategoryDropdownExpanded,
+                                expanded = isCategoryDropdownExpanded && canUseBusinessRead,
                                 suggestions = categorySuggestions,
                                 isExistingSelection = categoryResolution.isExisting,
                                 isValidForGenerate = categoryResolution.isValid,
                                 isPendingCreate = categoryResolution.isPendingCreate,
                                 isPendingCreateAccepted = isCategoryPendingAccepted,
                                 statusMessage = categoryStatusMessage,
-                                createPrompt = if (categoryResolution.isPendingCreate) {
+                                createPrompt = if (canUseBusinessWrite && categoryResolution.isPendingCreate) {
                                     stringResource(
                                         R.string.add_new_category_prompt,
                                         categoryResolution.displayName.orEmpty()
@@ -641,15 +735,19 @@ fun PreGenerateScreen(
                                 onInputChange = {
                                     selectedCategory = null
                                     acceptedPendingCategoryKey = null
-                                    databaseViewModel.onCategorySearchQueryChanged(it)
+                                    categoryQueryFromSuggestion = false
+                                    draft.categoryQuery.value = it
                                 },
-                                onSuggestionSelected = { suggestion ->
+                                onSuggestionSelected = selection@ { suggestion ->
                                     acceptedPendingCategoryKey = null
-                                    databaseViewModel.onCategorySearchQueryChanged(suggestion.name)
+                                    if (latestReadableDatabase == null) return@selection
+                                    categoryQueryFromSuggestion = true
+                                    draft.categoryQuery.value = suggestion.name
                                     selectedCategory = suggestion
                                     isCategoryDropdownExpanded = false
                                 },
-                                onCreateRequested = {
+                                onCreateRequested = create@ {
+                                    if (!latestCanWriteBusiness || latestReadableDatabase == null) return@create
                                     acceptedPendingCategoryKey = categoryResolution.displayName
                                         ?.let { normalizedPreGenerateRelationKey(it) }
                                     isCategoryDropdownExpanded = false
@@ -669,24 +767,32 @@ fun PreGenerateScreen(
                                 totalRows = totalDataRows,
                                 isGenerateEnabled = isGenerateEnabled,
                                 generateDisabledReason = generateDisabledReason,
-                                onGenerate = {
+                                onGenerate = generate@ {
+                                    val admittedDatabase = readableDatabase ?: return@generate
+                                    val admittedKey = businessPresentationKey
                                     if (isGenerateEnabled) {
                                         val supplierName = supplierResolution.displayName
                                         val categoryName = categoryResolution.displayName
                                         if (!supplierName.isNullOrBlank() && !categoryName.isNullOrBlank()) {
                                             screenScope.launch {
+                                                fun stillAdmitted() = latestCanWriteBusiness &&
+                                                    latestReadableDatabase === admittedDatabase &&
+                                                    latestBusinessKey == admittedKey
+                                                if (!stillAdmitted()) return@launch
                                                 val resolvedSupplierName = if (supplierResolution.isPendingCreate) {
-                                                    databaseViewModel.addSupplier(supplierName)?.name ?: supplierName
-                                                } else {
-                                                    supplierName
-                                                }
+                                                    admittedDatabase.addSupplier(supplierName)?.name ?: supplierName
+                                                } else supplierName
+                                                if (!stillAdmitted()) return@launch
                                                 val resolvedCategoryName = if (categoryResolution.isPendingCreate) {
-                                                    databaseViewModel.addCategory(categoryName)?.name ?: categoryName
-                                                } else {
-                                                    categoryName
-                                                }
-                                                databaseViewModel.onSupplierSearchQueryChanged(resolvedSupplierName)
-                                                databaseViewModel.onCategorySearchQueryChanged(resolvedCategoryName)
+                                                    admittedDatabase.addCategory(categoryName)?.name ?: categoryName
+                                                } else categoryName
+                                                if (!stillAdmitted()) return@launch
+                                                draft.supplierQuery.value = resolvedSupplierName
+                                                draft.categoryQuery.value = resolvedCategoryName
+                                                supplierQueryFromSuggestion = true
+                                                categoryQueryFromSuggestion = true
+                                                admittedDatabase.onSupplierSearchQueryChanged(resolvedSupplierName)
+                                                admittedDatabase.onCategorySearchQueryChanged(resolvedCategoryName)
                                                 onGenerate(resolvedSupplierName, resolvedCategoryName)
                                             }
                                         }
@@ -730,7 +836,7 @@ fun PreGenerateScreen(
                             onClick = {
                                 val index = headerDialogIndex ?: return@TextButton
                                 if (customHeader.isNotBlank()) {
-                                    excelViewModel.setHeaderType(index, customHeader.trim())
+                                    draft.setHeaderType(index, customHeader.trim())
                                     showCustomHeaderDialog = false
                                     customHeader = ""
                                     headerDialogIndex = null
@@ -780,7 +886,7 @@ fun PreGenerateScreen(
                             preGeneratePossibleKeys.forEach { key ->
                                 TextButton(
                                     onClick = {
-                                        excelViewModel.setHeaderType(columnIndex, key)
+                                        draft.setHeaderType(columnIndex, key)
                                         headerDialogIndex = null
                                     }
                                 ) {
@@ -798,7 +904,7 @@ fun PreGenerateScreen(
                             if (canRestoreOriginalHeader) {
                                 TextButton(
                                     onClick = {
-                                        excelViewModel.restoreOriginalHeader(columnIndex)
+                                        draft.restoreOriginalHeader(columnIndex)
                                         headerDialogIndex = null
                                     }
                                 ) {

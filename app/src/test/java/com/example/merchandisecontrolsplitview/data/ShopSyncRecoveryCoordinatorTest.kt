@@ -3764,6 +3764,71 @@ class ShopSyncRecoveryCoordinatorTest {
     }
 
     @Test
+    fun scopedHistoryReadsCommittedBodiesWithoutQualifyingUnrelatedPrices() = runTest {
+        remote = RecoveryRemoteFixture(v2HistoryFixture())
+        seedVerifiedSameScopeRecovery()
+        val original = db.historyEntryDao().getAllUserVisibleSnapshot().single()
+        db.openHelper.writableDatabase.execSQL("UPDATE product_prices SET note='unverified price body'")
+        val unavailable = repository.resolveOfflineBusinessDataScope(activeScope(), canWrite = false)
+        assertFalse(unavailable.allowsLocalOperations)
+        val tracker = CatalogSyncStateTracker(unavailable)
+        val guarded = DefaultInventoryRepository(db, tracker)
+
+        val verified = requireNotNull(guarded.readQualifiedHistory(activeScope())).single()
+        assertEquals(original.uid, verified.uid)
+        assertEquals(original.displayName, verified.displayName)
+        assertEquals(original.data, verified.data)
+        assertEquals(original.editable, verified.editable)
+        assertEquals(original.complete, verified.complete)
+        assertNull(guarded.readQualifiedHistory(task126ActiveOwnerStoreScope("foreign-history-owner", selectedShop())))
+
+        db.historyEntryDao().update(original.copy(displayName = "unverified history body"))
+        assertNull(guarded.readQualifiedHistory(activeScope()))
+        db.historyEntryDao().update(original)
+        db.historyEntryDao().insert(original.copy(uid = 0, id = "unverified-local-history"))
+        assertNull(guarded.readQualifiedHistory(activeScope()))
+    }
+
+    @Test
+    fun scopedCatalogSearchVerifiesCurrentRelationsWithoutQualifyingHistoryOrPrices() = runTest {
+        remote = RecoveryRemoteFixture(v2HistoryFixture())
+        seedVerifiedSameScopeRecovery()
+        db.openHelper.writableDatabase.execSQL("UPDATE history_entries SET displayName='unverified History'")
+        db.openHelper.writableDatabase.execSQL("UPDATE product_prices SET note='unverified Prices'")
+        val unavailable = repository.resolveOfflineBusinessDataScope(activeScope(), canWrite = false)
+        assertFalse(unavailable.allowsLocalOperations)
+        val guarded = DefaultInventoryRepository(db, CatalogSyncStateTracker(unavailable))
+        val request = QualifiedCatalogRequest("Target supplier", 0)
+
+        val page = requireNotNull(guarded.readQualifiedCatalog(activeScope(), request))
+        val row = page.products.single()
+        assertEquals("target-barcode", row.product.barcode)
+        assertEquals("Target supplier", row.supplierName)
+        assertEquals("Target category", row.categoryName)
+        assertEquals(db.productDao().findByBarcode("target-barcode")?.retailPrice, row.currentRetailPrice)
+        assertNull(row.prevRetail)
+        assertFalse(page.hasMore)
+        assertTrue(requireNotNull(guarded.readQualifiedCatalog(activeScope(), request.copy(filter = "missing"))).products.isEmpty())
+        assertNull(guarded.readQualifiedCatalog(task126ActiveOwnerStoreScope("foreign-owner", selectedShop()), request))
+
+        db.openHelper.writableDatabase.execSQL("UPDATE suppliers SET name='unverified Supplier'")
+        assertNull(guarded.readQualifiedCatalog(activeScope(), request))
+    }
+
+    @Test
+    fun cloudConfirmationUsesActivatedBaselineWithReadOnlyAuthority() = runTest {
+        seedVerifiedSameScopeRecovery()
+        val product = requireNotNull(db.productDao().findByBarcode("target-barcode"))
+        assertTrue(db.productRemoteRefDao().isProductCloudConfirmationCandidate(product.id))
+        val readOnly = repository.resolveOfflineBusinessDataScope(activeScope(), canWrite = false)
+        assertTrue(readOnly.allowsLocalOperations)
+        assertFalse(readOnly.localWritesAllowed)
+        val guarded = DefaultInventoryRepository(db, CatalogSyncStateTracker(readOnly))
+
+        assertTrue(guarded.observeProductCloudConfirmed(product.id).first())
+    }
+
+    @Test
     fun `143 same scope save commits durably before recovery transport is released`() = runTest {
         seedVerifiedSameScopeRecovery()
         val tracker = CatalogSyncStateTracker(repository.resolveBusinessDataScope(activeScope()))

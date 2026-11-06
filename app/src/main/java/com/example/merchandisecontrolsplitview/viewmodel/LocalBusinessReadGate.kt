@@ -6,6 +6,8 @@ import androidx.paging.PagingState
 import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
 import com.example.merchandisecontrolsplitview.data.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.*
 
 /** RAM presentation identity only. It never admits a read, write or cloud operation. */
@@ -37,7 +39,8 @@ internal fun localBusinessPresentationKey(
 
 internal data class LocalBusinessReadSnapshot(
     val key: LocalBusinessPresentationKey?, val state: Task126BusinessDataScopeState?,
-    val stamp: Task126LocalPresentationStamp?, val allowed: Boolean
+    val stamp: Task126LocalPresentationStamp?, val allowed: Boolean,
+    val writeStamp: Task126LocalPresentationStamp? = stamp
 )
 
 /** Cancels DAO subscriptions on withdrawal; a retained snapshot is presentation only. */
@@ -62,11 +65,12 @@ internal class LocalBusinessReadGate private constructor(
                 val shop = app.shopContextRepository.state.value
                 val state = app.catalogSyncStateTracker.businessDataScopeState.value
                 val key = localBusinessPresentationKey(auth, identity, current, shop, state)
-                val stamp = app.catalogSyncStateTracker.captureLocalPresentationStamp(state)
+                val stamp = app.catalogSyncStateTracker.captureLocalReadPresentationStamp(state)
+                val writeStamp = app.catalogSyncStateTracker.captureLocalPresentationStamp(state)
                 val allowed = state.allowsLocalOperations && stamp != null &&
                     (state.status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED ||
                         qualifiedLocalBusinessOwner(auth, identity, current, shop, state) != null)
-                LocalBusinessReadSnapshot(key, state, stamp, allowed)
+                LocalBusinessReadSnapshot(key, state, stamp, allowed, writeStamp)
             }
         },
         (application as? MerchandiseControlApplication)?.catalogSyncStateTracker
@@ -74,10 +78,16 @@ internal class LocalBusinessReadGate private constructor(
 
     internal constructor(states: StateFlow<LocalBusinessReadSnapshot>) : this(states.map { Unit }, { states.value })
     fun snapshot(): LocalBusinessReadSnapshot = readSnapshot()
-    fun isCurrent(expected: LocalBusinessReadSnapshot): Boolean = expected.allowed && readSnapshot() == expected
+    private fun readIdentity(snapshot: LocalBusinessReadSnapshot) =
+        Triple(snapshot.key, snapshot.stamp, snapshot.allowed)
 
-    /** One-shot callbacks keep their original stamp across dispatch, reads and writes. */
-    suspend fun <T> runIfCurrent(expected: LocalBusinessReadSnapshot, block: suspend () -> T): T? {
+    fun isCurrent(expected: LocalBusinessReadSnapshot): Boolean =
+        expected.allowed && readIdentity(readSnapshot()) == readIdentity(expected)
+
+    fun isWriteCurrent(expected: LocalBusinessReadSnapshot): Boolean =
+        expected.allowed && expected.state?.localWritesAllowed != false && readSnapshot() == expected
+
+    suspend fun <T> runReadIfCurrent(expected: LocalBusinessReadSnapshot, block: suspend () -> T): T? {
         if (!isCurrent(expected)) return null
         val qualified: suspend () -> T? = {
             if (!isCurrent(expected)) null
@@ -86,13 +96,31 @@ internal class LocalBusinessReadGate private constructor(
                 if (isCurrent(expected)) result else null
             }
         }
+        return try {
+            if (scopeGuard != null) scopeGuard.withLocalBusinessReadFlight(qualified) else qualified()
+        } catch (_: Task126BusinessDataScopeChangedException) {
+            currentCoroutineContext().ensureActive()
+            null
+        }
+    }
+
+    /** Existing one-shot callbacks retain their writer flight and require write capability. */
+    suspend fun <T> runIfCurrent(expected: LocalBusinessReadSnapshot, block: suspend () -> T): T? {
+        if (!isWriteCurrent(expected)) return null
+        val qualified: suspend () -> T? = {
+            if (!isWriteCurrent(expected)) null
+            else {
+                val result = block()
+                if (isWriteCurrent(expected)) result else null
+            }
+        }
         return if (scopeGuard != null) scopeGuard.withLocalBusinessDataScopeFlight(qualified) else qualified()
     }
 
     fun <T> observe(empty: T, source: () -> Flow<T>): Flow<T> = flow {
         var lastAdmittedKey: LocalBusinessPresentationKey? = null
         var admittedOnce = false
-        emitAll(changes.onStart { emit(Unit) }.map { readSnapshot() }.distinctUntilChanged().flatMapLatest { expected ->
+        emitAll(changes.onStart { emit(Unit) }.map { readSnapshot() }.distinctUntilChangedBy(::readIdentity).flatMapLatest { expected ->
             if (!expected.allowed) {
                 if (!admittedOnce || expected.key == null || expected.key != lastAdmittedKey) flowOf(empty)
                 else emptyFlow() // Keep only the last value for the same hidden RAM presentation.
@@ -118,9 +146,8 @@ internal class LocalBusinessReadGate private constructor(
         override suspend fun load(params: LoadParams<Key>): LoadResult<Key, Value> {
             if (!isCurrent(expected)) return LoadResult.Error(LocalReadUnavailable())
             val actual = delegate ?: return LoadResult.Error(LocalReadUnavailable())
-            if (!isCurrent(expected)) return LoadResult.Error(LocalReadUnavailable())
-            val result = actual.load(params)
-            return if (isCurrent(expected)) result else LoadResult.Error(LocalReadUnavailable())
+            return runReadIfCurrent(expected) { actual.load(params) }
+                ?: LoadResult.Error(LocalReadUnavailable())
         }
         override fun getRefreshKey(state: PagingState<Key, Value>): Key? = delegate?.getRefreshKey(state)
         override val jumpingSupported: Boolean get() = delegate?.jumpingSupported ?: false

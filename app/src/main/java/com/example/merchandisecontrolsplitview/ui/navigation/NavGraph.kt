@@ -23,6 +23,9 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import com.example.merchandisecontrolsplitview.ui.LocalBusinessRouteVisible
@@ -30,9 +33,11 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.graphicsLayer
@@ -69,72 +74,70 @@ import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeStat
 import com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeState
 import com.example.merchandisecontrolsplitview.data.CatalogSyncProgressState
 import com.example.merchandisecontrolsplitview.data.ShopContext
+import com.example.merchandisecontrolsplitview.data.QualifiedCatalogRequest
+import com.example.merchandisecontrolsplitview.pos.PosAccess
+import com.example.merchandisecontrolsplitview.pos.PosFeatureEnvironment
+import com.example.merchandisecontrolsplitview.pos.PosRoute
+import com.example.merchandisecontrolsplitview.pos.PosSalesRoute
+import com.example.merchandisecontrolsplitview.pos.PosSalesViewModel
+import com.example.merchandisecontrolsplitview.pos.PosScope
 import com.example.merchandisecontrolsplitview.data.task126ActiveOwnerStoreScope
 import com.example.merchandisecontrolsplitview.ui.components.CloudSyncIndicator
 import com.example.merchandisecontrolsplitview.ui.screens.*
 import com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.DatabaseViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModel
+import com.example.merchandisecontrolsplitview.viewmodel.ExcelImportDraftState
+import com.example.merchandisecontrolsplitview.viewmodel.RamExcelImportViewModel
 import com.example.merchandisecontrolsplitview.viewmodel.ImportFlowState
 import com.example.merchandisecontrolsplitview.viewmodel.businessScopeCheckingPresentation
 import com.example.merchandisecontrolsplitview.MainActivity
 import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
+private data class OpenedBusinessUi(
+    val excel: ExcelViewModel, val database: DatabaseViewModel,
+    val cloud: CatalogSyncProgressState, val shop: ShopContext,
+    val scope: Task126BusinessDataScopeState, val identity: LocalAuthIdentity?,
+    val identityCurrent: Boolean, val posScope: PosScope?, val posOnline: Boolean?
+)
+
 @Composable
 fun AppNavGraph() {
-    val context = LocalContext.current
-
-    val app = context.applicationContext as? MerchandiseControlApplication
+    val app = LocalContext.current.applicationContext as? MerchandiseControlApplication
         ?: error("MerchandiseControlApplication non configurata nel Manifest")
-    // Value-only bootstrap surface: no business getter or ViewModel may precede this gate.
     val storeAvailability by app.localStoreAvailability.collectAsState()
     val authState by app.authManager.state.collectAsState()
-    val authScope = rememberCoroutineScope()
-    if (storeAvailability !is LocalStoreAvailability.Ready) {
-        OptionsScreen(
-            authState = authState,
-            authEnabled = app.authManager.isEnabled,
-            wechatAuthEnabled = app.authManager.isWeChatEnabled,
-            onSignIn = { activity -> authScope.launch { app.authManager.signInWithGoogle(activity) } },
-            onSignInWithWeChat = { activity -> authScope.launch { app.authManager.signInWithWeChat(activity) } },
-            onSignOut = { authScope.launch { app.authManager.signOut() } },
-            onDismissError = { app.authManager.dismissError() },
-            localStoreStatusMessage = stringResource(
-                if (storeAvailability is LocalStoreAvailability.Checking) R.string.local_store_open_checking
-                else R.string.local_store_open_unavailable
-            ),
-            localStoreStatusDetails = (storeAvailability as? LocalStoreAvailability.Unavailable)?.let { failure ->
-                stringResource(R.string.local_store_open_details,
-                    stringResource(if (failure.code == "local_store_open_failed") R.string.local_store_open_failed_reason
-                        else R.string.local_store_open_unknown_reason),
-                    com.example.merchandisecontrolsplitview.BuildConfig.VERSION_NAME)
-            }
-        )
-        return
-    }
-    val localIdentity by app.authManager.localIdentity.collectAsState()
-    // Repository singleton dall'Application (task 010): owner unico, nessuna duplicazione.
-    val repository = app.repository
-    // Stato sync globale strutturato: fase corrente + conteggio opzionale.
-    val cloudSyncState by app.catalogSyncStateTracker.state.collectAsState()
-    val shopContext by app.shopContextRepository.state.collectAsState()
-    val businessDataScopeState by
-        app.catalogSyncStateTracker.businessDataScopeState.collectAsState()
-
-    val excelViewModel: ExcelViewModel = viewModel(
-        factory = ExcelViewModel.factory(app, repository)
-    )
-    val dbViewModel: DatabaseViewModel = viewModel(
-        factory = DatabaseViewModel.factory(app, repository)
-    )
-
-    AppNavGraphContent(
-        app, excelViewModel, dbViewModel, app.authManager.isEnabled, authState,
-        cloudSyncState, shopContext, businessDataScopeState,
-        localIdentity = localIdentity,
-        localIdentityCurrent = localIdentity?.let(app.authManager::isCurrentLocalIdentity) == true
+    val ram: RamExcelImportViewModel = viewModel()
+    val pos = if (app.authManager.isEnabled) {
+        viewModel<PosSalesViewModel>(factory = app.posSalesViewModelFactory)
+    } else null
+    // This branch owns all DB consumers. The shell below has one identity across the transition.
+    val opened = if (storeAvailability is LocalStoreAvailability.Ready) {
+        val repository = app.repository
+        val localIdentity by app.authManager.localIdentity.collectAsState()
+        val cloud by app.catalogSyncStateTracker.state.collectAsState()
+        val shop by app.shopContextRepository.state.collectAsState()
+        val scope by app.catalogSyncStateTracker.businessDataScopeState.collectAsState()
+        val posGeneration by app.shopContextRepository.posContextGeneration.collectAsState()
+        val posOnline by app.catalogSyncStateTracker.networkAvailable.collectAsState()
+        val excel: ExcelViewModel = viewModel(factory = ExcelViewModel.sharedDraftFactory(app, repository, ram.draft))
+        val database: DatabaseViewModel = viewModel(factory = DatabaseViewModel.factory(app, repository))
+        OpenedBusinessUi(excel, database, cloud, shop, scope, localIdentity,
+            localIdentity?.let(app.authManager::isCurrentLocalIdentity) == true,
+            app.currentPosScope(posGeneration), posOnline)
+    } else null
+    AppShellNavGraphContent(
+        app = app, draft = ram.draft, excelViewModel = opened?.excel,
+        dbViewModel = opened?.database, authEnabled = app.authManager.isEnabled, authState = authState,
+        cloudSyncState = opened?.cloud ?: CatalogSyncProgressState.idle(),
+        shopContext = opened?.shop ?: ShopContext.legacy(),
+        businessDataScopeState = opened?.scope ?: Task126BusinessDataScopeState.checking(),
+        localIdentity = opened?.identity, localIdentityCurrent = opened?.identityCurrent == true,
+        storeAvailability = storeAvailability,
+        posViewModel = pos, posScope = opened?.posScope, posOnline = opened?.posOnline
     )
 }
 
@@ -152,6 +155,30 @@ internal fun AppNavGraphContent(
     localIdentity: LocalAuthIdentity? = null,
     localIdentityCurrent: Boolean = false
 ) {
+    AppShellNavGraphContent(app, excelViewModel.importDraftState, excelViewModel, dbViewModel,
+        authEnabled, authState, cloudSyncState, shopContext, businessDataScopeState,
+        localIdentity, localIdentityCurrent, LocalStoreAvailability.Ready)
+}
+
+/** Nullable business dependencies are never manufactured for the safe shell. */
+@Composable
+internal fun AppShellNavGraphContent(
+    app: MerchandiseControlApplication,
+    draft: ExcelImportDraftState,
+    excelViewModel: ExcelViewModel?,
+    dbViewModel: DatabaseViewModel?,
+    authEnabled: Boolean,
+    authState: AuthState,
+    cloudSyncState: CatalogSyncProgressState,
+    shopContext: ShopContext,
+    businessDataScopeState: Task126BusinessDataScopeState,
+    localIdentity: LocalAuthIdentity? = null,
+    localIdentityCurrent: Boolean = false,
+    storeAvailability: LocalStoreAvailability,
+    posViewModel: PosSalesViewModel? = null,
+    posScope: PosScope? = null,
+    posOnline: Boolean? = null
+) {
     val context = LocalContext.current
     val navController = rememberNavController()
     // RAM-only binding survives disposal/recomposition of the same back-stack entry.
@@ -159,19 +186,48 @@ internal fun AppNavGraphContent(
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val authScope = rememberCoroutineScope()
 
-    val importAnalysisResult by dbViewModel.importAnalysisResult.collectAsState()
+    val importAnalysisResult = if (dbViewModel != null) {
+        val result by dbViewModel.importAnalysisResult.collectAsState()
+        result
+    } else null
+    val currentExcelViewModel by rememberUpdatedState(excelViewModel)
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val currentRootTab = navBackStackEntry?.destination.currentRootTab()
+    val lifecycleState by lifecycleOwner.lifecycle.currentStateFlow.collectAsState()
+    val posState = posViewModel?.state?.collectAsState()?.value
+    // Null chooses the authorized POS overview automatically; explicit control-merchandise wins.
+    var inventoryShowsPos by remember(posScope?.principalId, posScope?.shopId,
+        posScope?.deviceIdentifier, posScope?.authGeneration) { mutableStateOf<Boolean?>(null) }
+    val posEnvironment = PosFeatureEnvironment(
+        scope = posScope, online = posOnline == true,
+        foreground = lifecycleState.isAtLeast(Lifecycle.State.STARTED),
+        visible = currentRoute == Screen.FilePicker.route && inventoryShowsPos != false
+    )
+    var boundPosEnvironment by remember(posViewModel) { mutableStateOf<PosFeatureEnvironment?>(null) }
+    LaunchedEffect(posViewModel, posEnvironment) {
+        posViewModel?.environment(posEnvironment)
+        boundPosEnvironment = posEnvironment
+    }
+    DisposableEffect(posViewModel) {
+        onDispose { posViewModel?.environment(PosFeatureEnvironment(null, false, false, false)) }
+    }
+    val showPos = posScope != null && posOnline != null && posEnvironment.foreground &&
+        posEnvironment.visible && boundPosEnvironment == posEnvironment && app.currentPosScope() == posScope &&
+        (inventoryShowsPos == true || posState?.access == PosAccess.AVAILABLE)
+    LaunchedEffect(showPos, posState?.access) {
+        if (showPos && inventoryShowsPos == null && posState?.access == PosAccess.AVAILABLE) inventoryShowsPos = true
+    }
     val localOwner = qualifiedLocalBusinessOwner(authState, localIdentity, localIdentityCurrent,
         shopContext, businessDataScopeState)
-    val businessContentAllowed = businessContentAvailable(
+    val businessContentAllowed = excelViewModel != null && dbViewModel != null && businessContentAvailable(
         authEnabled = authEnabled,
         authState = authState,
         state = businessDataScopeState,
         activeScope = localOwner?.let { task126ActiveOwnerStoreScope(it, shopContext.selectedShop) },
         locallyQualifiedOwner = localOwner
     )
+    val businessWriteAllowed = businessContentAllowed && businessDataScopeState.localWritesAllowed
     val presentationKey = localBusinessPresentationKey(authState, localIdentity, localIdentityCurrent,
         shopContext, businessDataScopeState)
     val showBottomBar = currentRootTab != null
@@ -198,7 +254,7 @@ internal fun AppNavGraphContent(
         if (importAnalysisResult != null && pendingImportAnalysisExitCleanup == null) {
             val dest = navController.currentDestination?.route
             if (dest != Screen.ImportAnalysis.route) {
-                val origin = dbViewModel.importNavigationOrigin.value
+                val origin = dbViewModel?.importNavigationOrigin?.value ?: return@LaunchedEffect
                 navController.navigate(Screen.ImportAnalysis.createRoute(origin))
             }
         }
@@ -212,23 +268,22 @@ internal fun AppNavGraphContent(
 
         importAnalysisExitCleanupApplied = true
         when (cleanup) {
-            ImportAnalysisExitCleanup.CancelPreview -> dbViewModel.clearImportAnalysis()
-            ImportAnalysisExitCleanup.DismissPreview -> dbViewModel.dismissImportPreview()
+            ImportAnalysisExitCleanup.CancelPreview -> dbViewModel?.clearImportAnalysis()
+            ImportAnalysisExitCleanup.DismissPreview -> dbViewModel?.dismissImportPreview()
         }
     }
 
-    LaunchedEffect(navController, lifecycleOwner, businessContentAllowed) {
+    LaunchedEffect(navController, lifecycleOwner, draft) {
         navController.currentBackStackEntryFlow.first()
 
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             MainActivity.ShareBus.uris.collect { uris ->
-                if (!businessContentAllowed) return@collect
                 if (uris.isNotEmpty()) {
                     if (navController.currentDestination?.route != Screen.PreGenerate.route) {
                         navController.navigate(Screen.PreGenerate.route) { launchSingleTop = true }
                     }
-                    excelViewModel.resetState()
-                    excelViewModel.loadFromMultipleUris(context, uris)
+                    currentExcelViewModel?.resetState() ?: draft.resetState()
+                    draft.loadFromMultipleUris(context, uris)
                     MainActivity.ShareBus.uris.tryEmit(emptyList())
                 }
             }
@@ -243,7 +298,7 @@ internal fun AppNavGraphContent(
                 RootNavigationBar(
                     selectedTab = currentRootTab,
                     onTabSelected = { tab ->
-                        if (tab.screen == Screen.History) {
+                        if (tab.screen == Screen.History && excelViewModel != null && businessContentAllowed) {
                             navigateByGeneratedExitRequest(
                                 navController = navController,
                                 request = GeneratedExitRequest(
@@ -266,6 +321,17 @@ internal fun AppNavGraphContent(
         }
     ) { innerPadding ->
       Column(modifier = Modifier.fillMaxSize()) {
+        if (storeAvailability !is LocalStoreAvailability.Ready) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).testTag("local-store-shell-status")) {
+                Text(stringResource(if (storeAvailability is LocalStoreAvailability.Checking)
+                    R.string.local_store_open_checking else R.string.local_store_open_unavailable))
+                if (storeAvailability is LocalStoreAvailability.Unavailable) {
+                    androidx.compose.material3.TextButton(onClick = app::retryLocalStoreOpen) {
+                        Text(stringResource(R.string.retry))
+                    }
+                }
+            }
+        }
         // Reserve the indicator's measured height without changing the NavHost's identity.
         // Options keeps its own cloud status card as the primary surface.
         if (showCloudSyncIndicator) {
@@ -280,83 +346,73 @@ internal fun AppNavGraphContent(
             startDestination = Screen.FilePicker.route,
             modifier = Modifier.fillMaxSize()
         ) {
-            composable(Screen.FilePicker.route) { backStackEntry ->
-                BusinessRouteContent(
-                    screen = Screen.FilePicker, allowed = businessContentAllowed,
-                    currentKey = presentationKey,
-                    admittedKey = routePresentationBindings[backStackEntry.id],
-                    onAdmitted = { routePresentationBindings[backStackEntry.id] = it },
-                    state = businessDataScopeState, authState = authState,
-                    contentPadding = innerPadding,
-                    onBack = { if (!navController.popBackStack()) navigateToRootTab(navController, rootTabs.first()) },
-                    onDetails = { navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options }) }
-                ) {
-                FilePickerScreen(
-                    contentPadding = innerPadding,
-                    shopContext = shopContext,
-                    onShopSelected = { shopId ->
-                        if (businessContentAllowed) app.shopContextRepository.selectShop(shopId)
-                    },
-                    onFilesPicked = picked@ { uris ->
-                        if (!businessContentAllowed) return@picked
-                        excelViewModel.resetState()
-
-                        excelViewModel.loadFromMultipleUris(context, uris)
-                        navController.navigate(Screen.PreGenerate.route)
-                    },
-                    onManualAdd = manual@ {
-                        if (!businessContentAllowed) return@manual
-                        excelViewModel.resetState()
-
-                        excelViewModel.createManualEntry(context) { newUid ->
-                            excelViewModel.noteGeneratedNavigationContext(
-                                isNew = true,
-                                isManualEntry = true,
-                                importOrigin = ImportNavOrigin.HOME
-                            )
-                            navController.navigate(
-                                Screen.Generated.createRoute(
-                                    entryUid = newUid,
-                                    isNew = true,
-                                    isManualEntry = true
-                                )
+            composable(Screen.FilePicker.route) {
+                if (showPos && posViewModel != null) {
+                    val route = posState?.route ?: PosRoute.OVERVIEW
+                    val coordinator = posViewModel.coordinator
+                    BackHandler(enabled = route != PosRoute.OVERVIEW) {
+                        when (route) {
+                            PosRoute.HISTORY -> coordinator.showOverview()
+                            PosRoute.DETAIL -> coordinator.closeDetail()
+                            PosRoute.FILTER -> coordinator.closeFilters()
+                            PosRoute.OVERVIEW -> Unit
+                        }
+                    }
+                    PosSalesRoute(coordinator, { inventoryShowsPos = false }, innerPadding)
+                } else {
+                    Column(Modifier.fillMaxSize()) {
+                        if (posViewModel != null && posScope != null && posOnline != null) {
+                            TextButton(onClick = { inventoryShowsPos = true }) {
+                                Text(stringResource(R.string.task146_pos_today))
+                            }
+                        }
+                        Box(Modifier.weight(1f)) {
+                            FilePickerDraftScreen(
+                                contentPadding = innerPadding, shopContext = shopContext,
+                                manualEntryEnabled = businessWriteAllowed,
+                                onShopSelected = { shopId ->
+                                    if (businessContentAllowed) app.shopContextRepository.selectShop(shopId)
+                                },
+                                onFilesPicked = { uris ->
+                                    excelViewModel?.resetState() ?: draft.resetState()
+                                    draft.loadFromMultipleUris(context, uris)
+                                    navController.navigate(Screen.PreGenerate.route)
+                                },
+                                onManualAdd = manual@ {
+                                    val excel = excelViewModel ?: return@manual
+                                    if (!businessWriteAllowed) return@manual
+                                    excel.resetState()
+                                    excel.createManualEntry(context) { newUid ->
+                                        excel.noteGeneratedNavigationContext(isNew = true, isManualEntry = true, importOrigin = ImportNavOrigin.HOME)
+                                        navController.navigate(Screen.Generated.createRoute(newUid, isNew = true, isManualEntry = true))
+                                    }
+                                }
                             )
                         }
                     }
-                )
                 }
             }
 
-            composable(Screen.PreGenerate.route) { backStackEntry ->
-                BusinessRouteContent(
-                    screen = Screen.PreGenerate, allowed = businessContentAllowed,
-                    currentKey = presentationKey,
-                    admittedKey = routePresentationBindings[backStackEntry.id],
-                    onAdmitted = { routePresentationBindings[backStackEntry.id] = it },
-                    state = businessDataScopeState, authState = authState,
-                    contentPadding = innerPadding,
-                    onBack = { if (!navController.popBackStack()) navigateToRootTab(navController, rootTabs.first()) },
-                    onDetails = { navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options }) }
-                ) {
-                val dbUiState by dbViewModel.uiState.collectAsState()
-                PreGenerateScreen(
-                    excelViewModel = excelViewModel,
-                    databaseUiState = dbUiState,
-                    databaseViewModel = dbViewModel,
+            composable(Screen.PreGenerate.route) {
+                val dbUiState = if (dbViewModel != null) {
+                    val state by dbViewModel.uiState.collectAsState()
+                    state
+                } else null
+                PreGenerateDraftScreen(
+                    draft = draft, databaseUiState = dbUiState, databaseViewModel = dbViewModel,
+                    canReadBusiness = businessContentAllowed, canWriteBusiness = businessWriteAllowed,
+                    businessPresentationKey = presentationKey,
+                    onPrepareDraftReset = { excelViewModel?.resetState() ?: draft.resetState() },
                     onGenerate = generate@ { supplierName, categoryName ->
-                        if (!businessContentAllowed) return@generate
-                        excelViewModel.generateFilteredWithOldPrices(supplierName, categoryName) { entryUid ->
-                            excelViewModel.noteGeneratedNavigationContext(
-                                isNew = true,
-                                isManualEntry = false,
-                                importOrigin = ImportNavOrigin.HOME
-                            )
+                        val excel = excelViewModel ?: return@generate
+                        if (!businessWriteAllowed) return@generate
+                        excel.generateFilteredWithOldPrices(supplierName, categoryName) { entryUid ->
+                            excel.noteGeneratedNavigationContext(isNew = true, isManualEntry = false, importOrigin = ImportNavOrigin.HOME)
                             navController.navigate(Screen.Generated.createRoute(entryUid, isNew = true))
                         }
                     },
                     onBack = { navController.popBackStack() }
                 )
-                }
             }
 
             composable(
@@ -383,13 +439,15 @@ internal fun AppNavGraphContent(
                     onBack = { if (!navController.popBackStack()) navigateToRootTab(navController, rootTabs.first()) },
                     onDetails = { navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options }) }
                 ) {
+                val excelViewModel = excelViewModel ?: return@BusinessRouteContent
+                val dbViewModel = dbViewModel ?: return@BusinessRouteContent
                 val entryUid = backStackEntry.arguments?.getLong("entryUid") ?: 0L
                 val isNewEntry = backStackEntry.arguments?.getBoolean("isNew") ?: false
                 val isManualEntry = backStackEntry.arguments?.getBoolean("isManualEntry") ?: false
                 val generatedOrigin = resolveGeneratedSessionOrigin(excelViewModel, isNewEntry)
                 val currentSessionUid = excelViewModel.currentEntryStatus.value.third
                 val hasGeneratedSession =
-                    entryUid > 0L && (currentSessionUid == entryUid || excelViewModel.generated.value)
+                    entryUid > 0L && currentSessionUid == entryUid && excelViewModel.generated.value
 
                 if (!hasGeneratedSession) {
                     val navigateMissingSession = {
@@ -441,8 +499,23 @@ internal fun AppNavGraphContent(
             }
 
             composable(Screen.History.route) { backStackEntry ->
+                val historyKey = presentationKey
+                val historyViewModel = excelViewModel
+                val boundKey = routePresentationBindings[backStackEntry.id]
+                val readOnlyHistory = if (!businessContentAllowed && historyKey != null && historyViewModel != null &&
+                    businessDataScopeState.localReadsAllowed && (boundKey == null || boundKey == historyKey)) {
+                    key(historyKey) {
+                        val source = remember(historyViewModel, historyKey) {
+                            historyViewModel.observeQualifiedHistory(
+                                historyKey, task126ActiveOwnerStoreScope(historyKey.owner, shopContext.selectedShop)
+                            )
+                        }
+                        val entries by source.collectAsState(initial = null)
+                        entries
+                    }
+                } else null
                 BusinessRouteContent(
-                    screen = Screen.History, allowed = businessContentAllowed,
+                    screen = Screen.History, allowed = businessContentAllowed || readOnlyHistory != null,
                     currentKey = presentationKey,
                     admittedKey = routePresentationBindings[backStackEntry.id],
                     onAdmitted = { routePresentationBindings[backStackEntry.id] = it },
@@ -451,9 +524,17 @@ internal fun AppNavGraphContent(
                     onBack = { if (!navController.popBackStack()) navigateToRootTab(navController, rootTabs.first()) },
                     onDetails = { navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options }) }
                 ) {
+                val excelViewModel = excelViewModel ?: return@BusinessRouteContent
+                val currentHistoryFilter by excelViewModel.historyFilter.collectAsState()
+                if (!businessContentAllowed && readOnlyHistory != null) {
+                    QualifiedHistoryScreen(
+                        innerPadding, readOnlyHistory, currentHistoryFilter,
+                        excelViewModel.historyDateRange(currentHistoryFilter.dateFilter), excelViewModel::setHistoryFilter
+                    )
+                    return@BusinessRouteContent
+                }
                 val historyList by excelViewModel.historyDisplayEntries.collectAsState()
                 val historyActionMessage by excelViewModel.historyActionMessage
-                val currentHistoryFilter by excelViewModel.historyFilter.collectAsState()
                 val hasHistoryEntries by excelViewModel.hasHistoryEntries.collectAsState()
                 val availableSuppliers by excelViewModel.availableHistorySuppliers.collectAsState()
                 val availableCategories by excelViewModel.availableHistoryCategories.collectAsState()
@@ -483,17 +564,39 @@ internal fun AppNavGraphContent(
                             )
                         }
                     },
-                    onRename = { entry, newName -> if (businessContentAllowed) excelViewModel.renameHistoryEntry(entry.uid, newName) },
-                    onDelete = { entry -> if (businessContentAllowed) excelViewModel.deleteHistoryEntry(entry.uid) },
+                    onRename = { entry, newName -> if (businessWriteAllowed) excelViewModel.renameHistoryEntry(entry.uid, newName) },
+                    onDelete = { entry -> if (businessWriteAllowed) excelViewModel.deleteHistoryEntry(entry.uid) },
                     onHistoryActionMessageConsumed = { excelViewModel.consumeHistoryActionMessage() },
-                    onSetFilter = { filter -> excelViewModel.setHistoryFilter(filter) }
+                    onSetFilter = { filter -> excelViewModel.setHistoryFilter(filter) },
+                    canEdit = businessWriteAllowed
                 )
                 }
             }
 
             composable(Screen.Database.route) { backStackEntry ->
+                val catalogKey = presentationKey
+                val catalogViewModel = dbViewModel
+                val boundKey = routePresentationBindings[backStackEntry.id]
+                val pageSelection = remember(catalogKey) { MutableStateFlow<QualifiedCatalogRequest?>(null) }
+                var ordinaryCatalogAdmitted by remember(catalogKey) { mutableStateOf(false) }
+                SideEffect {
+                    if (businessContentAllowed && (boundKey == null || boundKey == catalogKey)) {
+                        ordinaryCatalogAdmitted = true
+                    }
+                }
+                val readOnlyCatalog = if (!businessContentAllowed && catalogKey != null && catalogViewModel != null &&
+                    businessDataScopeState.localReadsAllowed && (boundKey == null || boundKey == catalogKey)) {
+                    key(catalogKey) {
+                        val source = remember(catalogViewModel, catalogKey, pageSelection) {
+                            catalogViewModel.observeQualifiedCatalog(catalogKey,
+                                task126ActiveOwnerStoreScope(catalogKey.owner, shopContext.selectedShop), pageSelection)
+                        }
+                        val page by source.collectAsState(initial = null)
+                        page
+                    }
+                } else null
                 BusinessRouteContent(
-                    screen = Screen.Database, allowed = businessContentAllowed,
+                    screen = Screen.Database, allowed = businessContentAllowed || readOnlyCatalog != null,
                     currentKey = presentationKey,
                     admittedKey = routePresentationBindings[backStackEntry.id],
                     onAdmitted = { routePresentationBindings[backStackEntry.id] = it },
@@ -502,14 +605,38 @@ internal fun AppNavGraphContent(
                     onBack = { if (!navController.popBackStack()) navigateToRootTab(navController, rootTabs.first()) },
                     onDetails = { navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options }) }
                 ) {
-                DatabaseScreen(
-                    contentPadding = innerPadding,
-                    viewModel = dbViewModel
-                )
+                val dbViewModel = dbViewModel ?: return@BusinessRouteContent
+                if (businessContentAllowed || ordinaryCatalogAdmitted) {
+                    val ordinaryVisible = businessContentAllowed && LocalBusinessRouteVisible.current
+                    Box(Modifier.fillMaxSize()
+                        .graphicsLayer { alpha = if (ordinaryVisible) 1f else 0f }
+                        .then(if (ordinaryVisible) Modifier else Modifier.clearAndSetSemantics { })
+                        .onPreviewKeyEvent { !ordinaryVisible }) {
+                        CompositionLocalProvider(LocalBusinessRouteVisible provides ordinaryVisible) {
+                            DatabaseScreen(contentPadding = innerPadding, viewModel = dbViewModel)
+                        }
+                    }
+                }
+                if (!businessContentAllowed && readOnlyCatalog != null) {
+                    val rawFilter by dbViewModel.filter.collectAsState()
+                    val appliedFilter by dbViewModel.appliedProductFilter.collectAsState()
+                    val selectedPage by pageSelection.collectAsState()
+                    val request = selectedPage?.takeIf { it.filter == appliedFilter }
+                        ?: QualifiedCatalogRequest(appliedFilter, 0)
+                    Surface(Modifier.fillMaxSize()) {
+                        QualifiedCatalogReadScreen(innerPadding, readOnlyCatalog, request, rawFilter.orEmpty(),
+                            dbViewModel::setFilter, { pageSelection.value = it })
+                    }
+                }
                 }
             }
 
             composable(Screen.Options.route) {
+                if (dbViewModel == null) {
+                    SafeBootstrapOptions(app, authState, authEnabled, storeAvailability, innerPadding)
+                    return@composable
+                }
+
                 val catalogSyncViewModel: CatalogSyncViewModel = viewModel(
                     factory = CatalogSyncViewModel.factory(app)
                 )
@@ -604,6 +731,8 @@ internal fun AppNavGraphContent(
                     onBack = { if (!navController.popBackStack()) navigateToRootTab(navController, rootTabs.first()) },
                     onDetails = { navigateToRootTab(navController, rootTabs.first { it.screen == Screen.Options }) }
                 ) {
+                val excelViewModel = excelViewModel ?: return@BusinessRouteContent
+                val dbViewModel = dbViewModel ?: return@BusinessRouteContent
                 val importOrigin = ImportNavOrigin.parse(
                     importBackStackEntry.arguments?.getString(Screen.ImportAnalysis.ARG_ORIGIN)
                 )
@@ -701,7 +830,7 @@ internal fun AppNavGraphContent(
                         importFlowState = importFlowState,
                         canReturnToGeneratedForCorrection = hasGeneratedImportContext && !isApplyError,
                         onConfirm = confirm@ { previewId, newProducts, updatedProducts ->
-                            if (!businessContentAllowed) return@confirm
+                            if (!businessWriteAllowed) return@confirm
                             dbViewModel.importProducts(previewId, newProducts, updatedProducts, context)
                         },
                         onCorrectRows = correct@ {
@@ -763,6 +892,28 @@ internal fun AppNavGraphContent(
     }
 }
 
+
+@Composable
+private fun SafeBootstrapOptions(
+    app: MerchandiseControlApplication, authState: AuthState, authEnabled: Boolean,
+    availability: LocalStoreAvailability, padding: androidx.compose.foundation.layout.PaddingValues
+) {
+    val authScope = rememberCoroutineScope()
+    OptionsScreen(contentPadding = padding, authState = authState, authEnabled = authEnabled,
+        wechatAuthEnabled = app.authManager.isWeChatEnabled,
+        onSignIn = { activity -> authScope.launch { app.authManager.signInWithGoogle(activity) } },
+        onSignInWithWeChat = { activity -> authScope.launch { app.authManager.signInWithWeChat(activity) } },
+        onSignOut = { authScope.launch { app.authManager.signOut() } },
+        onDismissError = { app.authManager.dismissError() },
+        localStoreStatusMessage = stringResource(if (availability is LocalStoreAvailability.Checking)
+            R.string.local_store_open_checking else R.string.local_store_open_unavailable),
+        localStoreStatusDetails = (availability as? LocalStoreAvailability.Unavailable)?.let { failure ->
+            stringResource(R.string.local_store_open_details,
+                stringResource(if (failure.code == "local_store_open_failed") R.string.local_store_open_failed_reason
+                    else R.string.local_store_open_unknown_reason),
+                com.example.merchandisecontrolsplitview.BuildConfig.VERSION_NAME)
+        })
+}
 
 /** Every route owns a context surface. Keeping RAM nodes does not retain read/write authority. */
 @Composable
@@ -846,7 +997,7 @@ internal fun businessContentAvailable(
     activeScope: com.example.merchandisecontrolsplitview.data.Task126OwnerStoreScope? = state.localAccessScope ?: state.boundScope,
     locallyQualifiedOwner: String? = null
 ): Boolean {
-    if (!authEnabled || authState is AuthState.SignedOut) return state.status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED && state.boundScope == null
+    if (!authEnabled || authState is AuthState.SignedOut) return state.localReadsAllowed && state.status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED && state.boundScope == null
     val owner = when (authState) {
         is AuthState.SignedIn -> authState.userId
         AuthState.Checking -> locallyQualifiedOwner

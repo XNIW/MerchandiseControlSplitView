@@ -44,6 +44,13 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import com.example.merchandisecontrolsplitview.data.AppDatabase
 import com.example.merchandisecontrolsplitview.data.LocalStartupTrace
 import com.example.merchandisecontrolsplitview.data.span
+import com.example.merchandisecontrolsplitview.pos.OkHttpPosReadTransport
+import com.example.merchandisecontrolsplitview.pos.PosFeatureBindings
+import com.example.merchandisecontrolsplitview.pos.PosSalesViewModel
+import com.example.merchandisecontrolsplitview.pos.PosScope
+import com.example.merchandisecontrolsplitview.pos.PosWire
+import com.example.merchandisecontrolsplitview.pos.SupabasePosCredentialSource
+import okhttp3.OkHttpClient
 import com.example.merchandisecontrolsplitview.data.AuthState
 import com.example.merchandisecontrolsplitview.data.CatalogAutoSyncCoordinator
 import com.example.merchandisecontrolsplitview.data.CatalogRemoteDataSource
@@ -180,6 +187,7 @@ open class MerchandiseControlApplication : Application() {
     internal val localStoreAvailability: StateFlow<LocalStoreAvailability> = _localStoreAvailability.asStateFlow()
     private val localStoreOpenLock = Any()
     private var localStoreOpenJob: Job? = null
+    private var localStoreOpenAttempt = 0L
     private var businessRuntimeInitialized = false
     private var applicationTerminated = false
     private val validatedNetworks = mutableSetOf<Network>()
@@ -546,6 +554,36 @@ open class MerchandiseControlApplication : Application() {
         )
     }
 
+    // The POS RPC itself verifies the authenticated device and salesRead permission.
+    // Opening Room only makes the already-owned installation ID available for that read.
+    internal fun currentPosScope(expectedContextGeneration: Long? = null): PosScope? {
+        if (localStoreAvailability.value !is LocalStoreAvailability.Ready) return null
+        val signedIn = authManager.state.value as? AuthState.SignedIn ?: return null
+        val identity = authManager.localIdentity.value ?: return null
+        if (identity.userId != signedIn.userId || !authManager.isCurrentLocalIdentity(identity)) return null
+        val contextOwner = shopContextRepository
+        val generation = contextOwner.diagnosticShopEpoch()
+        if (expectedContextGeneration != null && generation != expectedContextGeneration) return null
+        val context = contextOwner.state.value
+        val shopId = context.activeShopId ?: return null
+        if (context.ownerUserId != identity.userId || !context.localAccessAllowed) return null
+        val device = deviceInstallIdProvider.currentId ?: return null
+        if (device.isBlank() || device.toByteArray(Charsets.UTF_8).size > 160) return null
+        if (runCatching { PosWire.uuid(identity.userId); PosWire.uuid(shopId) }.isFailure) return null
+        if (contextOwner.diagnosticShopEpoch() != generation || authManager.state.value != signedIn ||
+            !authManager.isCurrentLocalIdentity(identity) || deviceInstallIdProvider.currentId != device) return null
+        return PosScope(identity.userId, shopId, device, identity.authGeneration, generation)
+    }
+
+    internal val posSalesViewModelFactory by lazy {
+        val isCurrent: (PosScope) -> Boolean = { scope ->
+            currentPosScope() == scope && catalogSyncStateTracker.networkAvailable.value == true
+        }
+        val credentials = SupabasePosCredentialSource({ supabaseClient }, isCurrent)
+        val transport = OkHttpPosReadTransport(credentials, isCurrent, OkHttpClient())
+        PosSalesViewModel.factory(PosFeatureBindings(transport, isCurrent))
+    }
+
     /** Transport PostgREST backup sessioni history / `shared_sheet_sessions` (task 023). */
     private val rawSessionBackupRemoteDataSource: SessionBackupRemoteDataSource by lazy {
         SupabaseSessionBackupRemoteDataSource(supabaseClient)
@@ -626,6 +664,7 @@ open class MerchandiseControlApplication : Application() {
     internal fun retryLocalStoreOpen() {
         synchronized(localStoreOpenLock) {
             if (applicationTerminated || businessRuntimeInitialized || localStoreOpenJob?.isActive == true) return
+            val attempt = ++localStoreOpenAttempt
             val trace = LocalStartupTrace.start(null)
             _localStoreAvailability.value = LocalStoreAvailability.Checking
             trace?.event("room_checking")
@@ -637,12 +676,13 @@ open class MerchandiseControlApplication : Application() {
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (_: Exception) {
+                        if (!ownsLocalStoreOpenAttempt(attempt)) return@launch
                         _localStoreAvailability.value = LocalStoreAvailability.Unavailable("local_store_open_failed")
                         trace?.event("room_unavailable", "room_open_failed")
                         traceOutcome = "unavailable"
                         return@launch
                     }
-                    if (applicationTerminated) {
+                    if (!ownsLocalStoreOpenAttempt(attempt)) {
                         trace?.event("scope_discarded", "application_terminated")
                         traceOutcome = "discarded"
                         return@launch
@@ -673,8 +713,15 @@ open class MerchandiseControlApplication : Application() {
         }
     }
 
+    private fun ownsLocalStoreOpenAttempt(attempt: Long): Boolean = synchronized(localStoreOpenLock) {
+        !applicationTerminated && attempt == localStoreOpenAttempt
+    }
+
     override fun onTerminate() {
-        applicationTerminated = true
+        synchronized(localStoreOpenLock) {
+            applicationTerminated = true
+            localStoreOpenAttempt++
+        }
         appScope.cancel()
         ProcessLifecycleOwner.get().lifecycle.removeObserver(processLifecycleObserver)
         unregisterNetworkAutoSyncTrigger()

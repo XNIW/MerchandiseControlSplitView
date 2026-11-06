@@ -2323,14 +2323,67 @@ private suspend fun validateCanonicalManifestReceipt(
     checkpoint: ShopSyncRecoveryCheckpoint
 ) {
     val startupTrace = coroutineContext[LocalStartupTrace]
-    startupTrace.cost(StartupCostStage.RECEIPT_HEADER) {
-        if (checkpoint.schemaVersion != "shop-sync-recovery-checkpoint-v1" || checkpoint.status != "ready" ||
-            checkpoint.integrity.totalViolationCount != 0L || checkpoint.syncEvents.requiresFullRecovery) {
-            throw ShopSyncContractException("ordinary_canonical_receipt_invalid")
-        }
-    }
+    startupTrace.cost(StartupCostStage.RECEIPT_HEADER) { validateLocalCheckpointHeader(checkpoint) }
     startupTrace.cost(StartupCostStage.RECEIPT_RELATIONAL) { validateRelationalManifest(db, generationId) }
     startupTrace.cost(StartupCostStage.RECEIPT_MANIFEST) { validateManifest(db, generationId, checkpoint) }
+}
+
+private fun validateLocalCheckpointHeader(checkpoint: ShopSyncRecoveryCheckpoint) {
+    if (checkpoint.schemaVersion != "shop-sync-recovery-checkpoint-v1" || checkpoint.status != "ready" ||
+        checkpoint.integrity.totalViolationCount != 0L || checkpoint.syncEvents.requiresFullRecovery) {
+        throw ShopSyncContractException("ordinary_canonical_receipt_invalid")
+    }
+}
+
+/** A narrow read can consume this proof in its Room snapshot only. Pending local History has
+ * no standalone body proof yet, so it cannot be dropped from the comparison to obtain admission. */
+internal suspend fun validateShopSyncCommittedHistoryProof(
+    db: AppDatabase, generationId: String, checkpoint: ShopSyncRecoveryCheckpoint
+) {
+    if (!db.inTransaction()) throw ShopSyncContractException("history_proof_transaction_required")
+    validateLocalCheckpointHeader(checkpoint)
+    val history = listOf(ShopSyncRowDomain.HISTORY)
+    validateManifest(db, generationId, checkpoint, history)
+    validateHistoryTombstoneShadows(db, generationId)
+    db.openHelper.readableDatabase.query(
+        """
+        SELECT 1 FROM history_entries h
+        LEFT JOIN history_entry_remote_refs r ON r.historyEntryUid=h.uid
+        WHERE (h.deletedAt IS NULL AND (r.id IS NULL OR r.lastRemoteAppliedAt IS NULL
+               OR r.localChangeRevision<>r.lastSyncedLocalRevision OR h.syncStatus<>'SYNCED_SUCCESSFULLY'))
+           OR (h.deletedAt IS NOT NULL AND h.syncStatus='NOT_ATTEMPTED')
+        LIMIT 1
+        """.trimIndent()
+    ).use { if (it.moveToFirst()) throw ShopSyncContractException("history_proof_unproven_pending_body") }
+    validatePhysicalSnapshot(db, generationId, activeStoreHistory = true,
+        localOverlay = true, localAcknowledgements = true, domains = history, requireFullHistoryPayload = true)
+}
+
+/** Canonical and acknowledged Catalog bodies, including the manifest's image links. */
+internal suspend fun validateShopSyncCommittedCatalogProof(
+    db: AppDatabase, generationId: String, checkpoint: ShopSyncRecoveryCheckpoint
+) {
+    if (!db.inTransaction()) throw ShopSyncContractException("catalog_proof_transaction_required")
+    validateLocalCheckpointHeader(checkpoint)
+    val bodies = listOf(ShopSyncRowDomain.SUPPLIERS, ShopSyncRowDomain.CATEGORIES, ShopSyncRowDomain.PRODUCTS)
+    validateManifest(db, generationId, checkpoint, bodies + ShopSyncRowDomain.IMAGES)
+    validateRelationalManifest(db, generationId)
+    val sql = db.openHelper.readableDatabase
+    for ((table, refs, parent) in listOf(
+        Triple("suppliers", "supplier_remote_refs", "supplierId"),
+        Triple("categories", "category_remote_refs", "categoryId"),
+        Triple("products", "product_remote_refs", "productId")
+    )) {
+        sql.query(
+            "SELECT 1 FROM `$table` p LEFT JOIN `$refs` r ON r.`$parent`=p.id " +
+                "WHERE r.id IS NULL OR r.lastRemoteAppliedAt IS NULL " +
+                "OR r.localChangeRevision<>r.lastSyncedLocalRevision LIMIT 1"
+        ).use { if (it.moveToFirst()) throw ShopSyncContractException("catalog_proof_unproven_pending_body") }
+    }
+    sql.query("SELECT 1 FROM pending_catalog_tombstones LIMIT 1").use {
+        if (it.moveToFirst()) throw ShopSyncContractException("catalog_proof_unproven_pending_tombstone")
+    }
+    validatePhysicalSnapshot(db, generationId, localAcknowledgements = true, domains = bodies)
 }
 
 /** Shared complete local proof; the active store deliberately retains History tombstone bodies. */
@@ -2413,12 +2466,13 @@ private fun isCanonicalHistoryShadowUtc(value: String): Boolean =
 internal suspend fun validateManifest(
     db: AppDatabase,
     generationId: String,
-    checkpoint: ShopSyncRecoveryCheckpoint
+    checkpoint: ShopSyncRecoveryCheckpoint,
+    domains: List<ShopSyncRowDomain> = ShopSyncRowDomain.entries
 ) {
     val startupTrace = coroutineContext[LocalStartupTrace]
     val receiptCheckpoint = bindOrdinaryNoWorkReceiptCheckpoint(db)
     val calculated = linkedMapOf<ShopSyncRowDomain, ShopSyncDomainCheckpoint>()
-    for (domain in ShopSyncRowDomain.entries) {
+    for (domain in domains) {
         var afterId: String? = null
         var active = 0L
         var tombstones = 0L
@@ -2469,13 +2523,15 @@ internal suspend fun validateManifest(
             }
         }
     }
-    val catalogDigest = sha256(
-        calculated.getValue(ShopSyncRowDomain.SUPPLIERS).versionDigest + "\n" +
-            calculated.getValue(ShopSyncRowDomain.CATEGORIES).versionDigest + "\n" +
-            calculated.getValue(ShopSyncRowDomain.PRODUCTS).versionDigest
-    )
-    if (catalogDigest != checkpoint.catalog.digest) {
-        throw ShopSyncContractException("recovery_catalog_digest_mismatch")
+    if (ShopSyncRowDomain.PRODUCTS in domains) {
+        val catalogDigest = sha256(
+            calculated.getValue(ShopSyncRowDomain.SUPPLIERS).versionDigest + "\n" +
+                calculated.getValue(ShopSyncRowDomain.CATEGORIES).versionDigest + "\n" +
+                calculated.getValue(ShopSyncRowDomain.PRODUCTS).versionDigest
+        )
+        if (catalogDigest != checkpoint.catalog.digest) {
+            throw ShopSyncContractException("recovery_catalog_digest_mismatch")
+        }
     }
 }
 
@@ -2548,22 +2604,21 @@ internal suspend fun validatePhysicalSnapshot(
     historyPageRows: Int = DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS.historyPageRows,
     activeStoreHistory: Boolean = false,
     localOverlay: Boolean = false,
-    localAcknowledgements: Boolean = false
+    localAcknowledgements: Boolean = false,
+    domains: List<ShopSyncRowDomain> = listOf(ShopSyncRowDomain.SUPPLIERS, ShopSyncRowDomain.CATEGORIES,
+        ShopSyncRowDomain.PRODUCTS, ShopSyncRowDomain.PRICES, ShopSyncRowDomain.HISTORY),
+    requireFullHistoryPayload: Boolean = false
 ) {
     val startupTrace = coroutineContext[LocalStartupTrace]
     checkOrdinaryNoWorkReceiptPriority(db, "physical_begin")
-    val resolvedTombstones = if (localOverlay) validateBusinessResolutionPhysical(db).tombstoneRemoteIds else emptySet()
+    val resolvedTombstones = if (localOverlay && ShopSyncRowDomain.PRODUCTS in domains) {
+        validateBusinessResolutionPhysical(db).tombstoneRemoteIds
+    } else emptySet()
     val acknowledgedScope = if (localAcknowledgements) {
         requireNotNull(db.businessDataScopeBindingDao().get()) to
             requireNotNull(db.syncEventDeviceStateDao().get()).deviceId
     } else null
-    listOf(
-        ShopSyncRowDomain.SUPPLIERS,
-        ShopSyncRowDomain.CATEGORIES,
-        ShopSyncRowDomain.PRODUCTS,
-        ShopSyncRowDomain.PRICES,
-        ShopSyncRowDomain.HISTORY
-    ).forEach { domain ->
+    domains.forEach { domain ->
         var afterId: String? = null
         val pageSize = if (domain == ShopSyncRowDomain.HISTORY) {
             historyPageRows
@@ -2625,6 +2680,9 @@ internal suspend fun validatePhysicalSnapshot(
                         )
                     }
                     if (domain == ShopSyncRowDomain.HISTORY) {
+                        if (requireFullHistoryPayload && historyManifestPayloadVersion(manifest) != SESSION_PAYLOAD_VERSION) {
+                            throw ShopSyncContractException("history_proof_legacy_overlay_unqualified")
+                        }
                         validateHistoryPhysicalMaterialization(manifest, materialized)
                     }
                 }

@@ -95,6 +95,13 @@ interface HistoryEntryDao {
     @Query("SELECT * FROM history_entries WHERE uid = :uid LIMIT 1")
     fun observeByUid(uid: Long): Flow<HistoryEntry?>
 
+    @Query(
+        "SELECT * FROM history_entries WHERE uid = :uid AND " +
+            USER_VISIBLE_HISTORY_WHERE_CLAUSE +
+            " LIMIT 1"
+    )
+    fun observeUserVisibleByUid(uid: Long): Flow<HistoryEntry?>
+
     @Query("SELECT timestamp FROM history_entries ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLatestTimestamp(): String?
 

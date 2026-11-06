@@ -687,6 +687,30 @@ class ExcelViewModelTest {
     }
 
     @Test
+    fun `history selection ignores a different session and retires a removed selected session`() = runTest {
+        val observed = MutableSharedFlow<HistoryEntry?>(replay = 1)
+        every { repository.observeHistoryEntryByUid(44L) } returns observed
+        val callback = mockk<() -> Unit>(relaxed = true)
+        viewModel.loadHistoryEntry(44L, callback)
+        runCurrent()
+
+        observed.emit(historyEntry(uid = 55L))
+        runCurrent()
+        assertEquals(0L, viewModel.currentEntryStatus.value.third)
+        verify(exactly = 0) { callback.invoke() }
+
+        observed.emit(historyEntry(uid = 44L))
+        runCurrent()
+        assertEquals(44L, viewModel.currentEntryStatus.value.third)
+        verify(exactly = 1) { callback.invoke() }
+
+        observed.emit(null)
+        runCurrent()
+        assertEquals(0L, viewModel.currentEntryStatus.value.third)
+        assertFalse(viewModel.generated.value)
+    }
+
+    @Test
     fun `042 generated local save does not reload full sheet from self observer emission`() = runTest {
         val observedEntry = MutableSharedFlow<HistoryEntry?>(replay = 1)
         val initial = historyEntry(

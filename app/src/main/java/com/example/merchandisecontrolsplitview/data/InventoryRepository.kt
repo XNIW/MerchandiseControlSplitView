@@ -14,8 +14,16 @@ import com.example.merchandisecontrolsplitview.util.CatalogTextValidationExcepti
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -562,6 +570,12 @@ internal data class ShopSyncRecoveryStageApplyResult(
 internal class CanonicalCatalogInboundRequired(val outbound: CatalogSyncSummary? = null) :
     IllegalStateException("canonical_catalog_inbound_required")
 
+internal const val QUALIFIED_CATALOG_PAGE_SIZE = 20
+internal data class QualifiedCatalogRequest(val filter: String?, val page: Int)
+internal data class QualifiedCatalogPage(
+    val request: QualifiedCatalogRequest, val products: List<ProductWithDetails>, val hasMore: Boolean
+)
+
 class DefaultInventoryRepository(
     private val db: AppDatabase,
     private val businessDataScopeRuntimeGuard: Task126BusinessDataScopeRuntimeGuard =
@@ -926,6 +940,10 @@ class DefaultInventoryRepository(
 
     private suspend fun catalogResolutionScope(owner: String, shop: String): Pair<BusinessResolutionScope, SyncRecoveryBaseline> {
         requireCurrentBusinessDataScope()
+        return readCatalogResolutionScope(owner, shop)
+    }
+
+    private suspend fun readCatalogResolutionScope(owner: String, shop: String): Pair<BusinessResolutionScope, SyncRecoveryBaseline> {
         val binding = requireNotNull(db.businessDataScopeBindingDao().get()) { "resolution_binding_missing" }
         val baseline = requireNotNull(db.syncRecoveryBaselineDao().get()) { "resolution_baseline_missing" }
         val device = requireNotNull(db.syncEventDeviceStateDao().get()).deviceId
@@ -1345,26 +1363,45 @@ class DefaultInventoryRepository(
         productIds = productIds?.toList()?.ifEmpty { listOf(Long.MIN_VALUE) }
             ?: listOf(Long.MIN_VALUE)
     )
+    internal fun getCurrentDetailsPaged(filter: String?, productIds: Set<Long>?) =
+        productDao.getCurrentDetailsPaged(
+            filter = filter,
+            applyProductIds = productIds != null,
+            productIds = productIds?.toList()?.ifEmpty { listOf(Long.MIN_VALUE) }
+                ?: listOf(Long.MIN_VALUE)
+        )
+
+    internal suspend fun getCurrentProductDetails(productId: Long): ProductWithDetails? =
+        withContext(Dispatchers.IO) { productDao.getCurrentDetailsByIds(listOf(productId)).singleOrNull() }
+
+    internal fun observePriceSummaryForProduct(productId: Long) =
+        productDao.observePriceSummaryForProduct(productId)
+
     override suspend fun findProductByBarcode(barcode: String) =
-        withContext(Dispatchers.IO) { productDao.findDetailsByBarcode(barcode)?.productWithCurrentPrices() }
+        withContext(Dispatchers.IO) { productDao.findByBarcode(barcode) }
 
     override suspend fun findProductsByBarcodes(barcodes: List<String>) =
         withContext(Dispatchers.IO) {
             if (barcodes.isEmpty()) emptyList()
-            else productDao.findDetailsByBarcodes(barcodes).map { it.productWithCurrentPrices() }
+            else productDao.findByBarcodes(barcodes).sortedBy(Product::id)
         }
     override suspend fun getAllProducts(): List<Product> = withContext(Dispatchers.IO) { productDao.getAll() }
     override suspend fun getProductDetailsById(productId: Long): ProductWithDetails? =
         withContext(Dispatchers.IO) { productDao.getDetailsById(productId) }
     override suspend fun getProductForEditorReview(productId: Long): Product? =
-        businessDataScopeRuntimeGuard.withLocalBusinessDataScopeFlight {
-            requireCurrentBusinessDataScope()
-            val product = withContext(Dispatchers.IO) { productDao.getById(productId) }
-            requireCurrentBusinessDataScope()
-            product
+        businessDataScopeRuntimeGuard.withLocalBusinessReadFlight {
+            withContext(Dispatchers.IO) { productDao.getById(productId) }
         }
     override suspend fun getProductsWithDetailsByRemoteIds(
         remoteIds: List<String>
+    ): List<ProductWithDetails> = getDetailsByRemoteIds(remoteIds, productDao::getDetailsByIds)
+
+    internal suspend fun getCurrentDetailsByRemoteIds(remoteIds: List<String>): List<ProductWithDetails> =
+        getDetailsByRemoteIds(remoteIds, productDao::getCurrentDetailsByIds)
+
+    private suspend fun getDetailsByRemoteIds(
+        remoteIds: List<String>,
+        load: suspend (List<Long>) -> List<ProductWithDetails>
     ): List<ProductWithDetails> = withContext(Dispatchers.IO) {
         if (remoteIds.isEmpty()) return@withContext emptyList()
         require(remoteIds.size <= 100 && remoteIds.all(::isStorefrontRemoteIdentity))
@@ -1373,7 +1410,7 @@ class DefaultInventoryRepository(
             .filter { it.lastRemoteAppliedAt != null }
             .associateBy(ProductRemoteRef::remoteId)
         val orderedLocalIds = remoteIds.mapNotNull { refsByRemoteId[it]?.productId }
-        val detailsById = productDao.getDetailsByIds(orderedLocalIds.distinct())
+        val detailsById = load(orderedLocalIds.distinct())
             .associateBy { it.product.id }
         orderedLocalIds.mapNotNull(detailsById::get)
     }
@@ -1382,17 +1419,46 @@ class DefaultInventoryRepository(
             productRemoteRefDao.getByProductId(productId)?.lastRemoteAppliedAt != null
         }
 
-    override fun observeProductCloudConfirmed(productId: Long): Flow<Boolean> =
+    @OptIn(ExperimentalCoroutinesApi::class)
+    override fun observeProductCloudConfirmed(productId: Long): Flow<Boolean> {
+        val tracker = businessDataScopeRuntimeGuard as? CatalogSyncStateTracker
+            ?: return observeProductCloudConfirmationRows(productId)
+        val initial = tracker.businessDataScopeState.value
+        val scope = initial.localAccessScope ?: initial.boundScope
+        val unmanaged = initial.status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED
+        fun admission(state: Task126BusinessDataScopeState): Task126LocalPresentationStamp? {
+            val current = state.localAccessScope ?: state.boundScope
+            val sameScope = if (unmanaged) {
+                state.status == Task126BusinessDataScopeStatus.UNMANAGED_ALLOWED && current == null
+            } else {
+                scope != null && current != null &&
+                    Task126OwnerStoreGate.validate(scope, current) == Task126OwnerStoreGateDecision.Allowed
+            }
+            return if (sameScope) tracker.captureLocalReadPresentationStamp(state) else null
+        }
+        // A cutover can retire the reader and commit before Room has an active observer.
+        // Reattach on the next admitted generation and read its current evidence immediately.
+        return combine(tracker.businessDataScopeState, tracker.localPresentationChanges) { state, _ ->
+            admission(state)
+        }.distinctUntilChanged().flatMapLatest { stamp ->
+            if (stamp == null) flowOf(false)
+            else observeProductCloudConfirmationRows(productId).map { confirmed ->
+                confirmed && admission(tracker.businessDataScopeState.value) == stamp
+            }
+        }.buffer(0)
+    }
+
+    private fun observeProductCloudConfirmationRows(productId: Long): Flow<Boolean> =
         db.invalidationTracker.createFlow("products", "product_remote_refs", "product_prices",
             "product_price_remote_refs", "sync_event_outbox", "business_data_scope_binding", "sync_recovery_baseline",
             emitInitialState = true).map {
             withContext(Dispatchers.IO) {
                 try {
-                    businessDataScopeRuntimeGuard.withLocalBusinessDataScopeFlight {
+                    businessDataScopeRuntimeGuard.withLocalBusinessReadFlight {
                         db.withTransaction {
                             if (!productRemoteRefDao.isProductCloudConfirmationCandidate(productId)) return@withTransaction false
                             val ref = productRemoteRefDao.getByProductId(productId) ?: return@withTransaction false
-                            val identity = localResolutionIdentity()
+                            val identity = localResolutionIdentity(::readCatalogResolutionScope)
                             if (identity == null) {
                                 // Legacy unqualified scope has no resolution authority; retain its conservative raw guard.
                                 return@withTransaction !db.openHelper.readableDatabase.query(
@@ -1409,6 +1475,9 @@ class DefaultInventoryRepository(
                                 } }
                         }
                     }
+                } catch (_: Task126BusinessDataScopeChangedException) {
+                    coroutineContext.ensureActive()
+                    false
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (_: Exception) {
@@ -2008,7 +2077,7 @@ class DefaultInventoryRepository(
     }
 
     // --- History Implementations ---
-    private fun historyRangeFor(filter: DateFilter): Pair<String, String>? {
+    internal fun historyRangeFor(filter: DateFilter): Pair<String, String>? {
         val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
         return when (filter) {
             is DateFilter.All -> null
@@ -2029,6 +2098,104 @@ class DefaultInventoryRepository(
                 val endDateString = filter.endDate.atTime(23, 59, 59).format(formatter)
                 startDateString to endDateString
             }
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    internal fun observeQualifiedHistory(scope: Task126OwnerStoreScope): Flow<List<HistoryEntry>?> =
+        observeDomainReadCandidates(scope) {
+            db.invalidationTracker.createFlow(
+                "history_entries", "history_entry_remote_refs", "sync_recovery_manifest",
+                "sync_recovery_baseline", "business_data_scope_binding", "sync_event_device_state",
+                "sync_event_watermarks", "sync_recovery_journal", emitInitialState = true
+            ).map { readQualifiedHistory(scope) }
+        }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    internal fun observeQualifiedCatalog(
+        scope: Task126OwnerStoreScope, requests: Flow<QualifiedCatalogRequest>
+    ): Flow<QualifiedCatalogPage?> = observeDomainReadCandidates(scope) {
+        combine(
+            db.invalidationTracker.createFlow(
+                "products", "suppliers", "categories", "product_remote_refs", "supplier_remote_refs",
+                "category_remote_refs", "pending_catalog_tombstones", "sync_recovery_manifest",
+                "sync_recovery_baseline", "business_data_scope_binding", "sync_event_device_state",
+                "sync_event_watermarks", "sync_recovery_journal", emitInitialState = true
+            ), requests
+        ) { _, request -> request }.mapLatest { request -> readQualifiedCatalog(scope, request) }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun <T> observeDomainReadCandidates(
+        scope: Task126OwnerStoreScope, source: () -> Flow<T?>
+    ): Flow<T?> {
+        val tracker = businessDataScopeRuntimeGuard as? CatalogSyncStateTracker ?: return flowOf(null)
+        return combine(tracker.businessDataScopeState, tracker.localPresentationChanges) { state, epoch ->
+            val bound = state.boundScope
+            val candidate = state.localReadsAllowed && bound != null &&
+                Task126OwnerStoreGate.validate(bound, scope) == Task126OwnerStoreGateDecision.Allowed
+            Triple(candidate, state.allowsLocalOperations, epoch)
+        }.distinctUntilChanged().flatMapLatest { (candidate, _, _) ->
+            if (!candidate) flowOf(null) else source().onStart { emit(null) }
+        }.buffer(0)
+    }
+
+    internal suspend fun readQualifiedHistory(scope: Task126OwnerStoreScope): List<HistoryEntry>? =
+        readQualifiedDomain(scope, ScopedReadDomain.HISTORY) {
+            historyDao.getAllUserVisibleSnapshot().filter { it.deletedAt == null }.map { entry ->
+                val summary = buildRemoteSessionLocalState(entry.data, SessionOverlay(
+                    editable = entry.editable, complete = entry.complete
+                ))
+                entry.copy(totalItems = summary.totalItems, orderTotal = summary.orderTotal,
+                    paymentTotal = summary.paymentTotal, missingItems = summary.missingItems)
+            }
+        }
+
+    internal suspend fun readQualifiedCatalog(
+        scope: Task126OwnerStoreScope, request: QualifiedCatalogRequest
+    ): QualifiedCatalogPage? = readQualifiedDomain(scope, ScopedReadDomain.CATALOG) {
+        require(request.page >= 0)
+        val rows = productDao.getCurrentDetailsPage(request.filter, QUALIFIED_CATALOG_PAGE_SIZE + 1,
+            request.page.toLong() * QUALIFIED_CATALOG_PAGE_SIZE)
+        val currentRows = rows.take(QUALIFIED_CATALOG_PAGE_SIZE).map { row ->
+            row.copy(product = row.product.copy(oldPurchasePrice = null, oldRetailPrice = null))
+        }
+        QualifiedCatalogPage(request, currentRows, rows.size > QUALIFIED_CATALOG_PAGE_SIZE)
+    }
+
+    private enum class ScopedReadDomain { CATALOG, HISTORY }
+
+    /** Null leaves the route unavailable. Returned values were read in the proving Room transaction. */
+    private suspend fun <T> readQualifiedDomain(
+        scope: Task126OwnerStoreScope, domain: ScopedReadDomain, read: suspend () -> T
+    ): T? {
+        val tracker = businessDataScopeRuntimeGuard as? CatalogSyncStateTracker ?: return null
+        return try {
+            tracker.withDomainQualificationReadFlight(scope) {
+                withContext(Dispatchers.IO) {
+                    db.withTransaction {
+                        val binding = businessDataScopeBindingDao.get()?.toOwnerStoreScope() ?: return@withTransaction null
+                        if (Task126OwnerStoreGate.validate(binding, scope) != Task126OwnerStoreGateDecision.Allowed) {
+                            return@withTransaction null
+                        }
+                        val journal = syncRecoveryJournalDao.get()
+                        if (journal != null && (journal.ownerHash != binding.ownerHash ||
+                            journal.storeScope != binding.storeId ||
+                            journal.authorizationMode != SyncRecoveryAuthorizationModes.SAME_SCOPE)) {
+                            return@withTransaction null
+                        }
+                        if (!hasStructurallyUsableLocalSnapshot(binding, domain)) return@withTransaction null
+                        read()
+                    }
+                }
+            }
+        } catch (_: Task126BusinessDataScopeChangedException) {
+            coroutineContext.ensureActive()
+            null
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: android.database.SQLException) {
+            null
         }
     }
 
@@ -2053,11 +2220,12 @@ class DefaultInventoryRepository(
     override fun hasHistoryEntriesFlow(): Flow<Boolean> = historyDao.hasUserVisibleEntriesFlow()
 
     override fun observeHistoryEntryByUid(uid: Long): Flow<HistoryEntry?> =
-        historyDao.observeByUid(uid)
+        historyDao.observeUserVisibleByUid(uid)
 
     override suspend fun getHistoryEntryByUid(uid: Long) = withContext(Dispatchers.IO) { historyDao.getByUid(uid) }
     override suspend fun insertHistoryEntry(entry: HistoryEntry) = withLocalBusinessMutation {
         withContext(Dispatchers.IO) {
+            requireCurrentBusinessDataScope()
             val uid = historyDao.insert(entry.withInitialDisplayName())
             if (uid > 0L) notifyHistorySessionPayloadChanged(uid)
             uid
@@ -3616,12 +3784,12 @@ class DefaultInventoryRepository(
                     BusinessDataScopeBinding.from(legacyBoundScope, System.currentTimeMillis())
                 )
             }
-            val snapshot = readLocalDatabaseStatusSnapshot(ownerUserId = null, selectedShop = null)
             val pendingTargetRecovery = syncRecoveryJournalDao.getForScope(
                 ownerHash = activeScope.ownerHash,
                 storeScope = activeScope.storeId
             )
             if (pendingTargetRecovery != null) {
+                val snapshot = readLocalDatabaseStatusSnapshot(ownerUserId = null, selectedShop = null)
                 val sameScope = storedBinding != null && boundScope != null &&
                     Task126OwnerStoreGate.validate(boundScope, activeScope) == Task126OwnerStoreGateDecision.Allowed &&
                     pendingTargetRecovery.authorizationMode == SyncRecoveryAuthorizationModes.SAME_SCOPE
@@ -3634,6 +3802,13 @@ class DefaultInventoryRepository(
                     localAccessScope = localScope
                 )
             }
+            if (storedBinding != null && boundScope != null &&
+                Task126OwnerStoreGate.validate(boundScope, activeScope) == Task126OwnerStoreGateDecision.Allowed) {
+                return@withTransaction readyStateAfterVerifiedBinding(
+                    boundScope, "binding_missing_after_import", ordinaryBinding = storedBinding
+                )
+            }
+            val snapshot = readLocalDatabaseStatusSnapshot(ownerUserId = null, selectedShop = null)
             when (val decision = Task126OwnerStoreGate.resolveBinding(boundScope, activeScope, snapshot)) {
                 Task126BusinessDataBindingDecision.AllowExisting ->
                     readyStateAfterVerifiedBinding(boundScope ?: activeScope, "binding_missing_after_import")
@@ -3761,9 +3936,11 @@ class DefaultInventoryRepository(
 
     private suspend fun readyStateAfterVerifiedBinding(
         expectedScope: Task126OwnerStoreScope,
-        errorCode: String
+        errorCode: String,
+        ordinaryBinding: BusinessDataScopeBinding? = null
     ): Task126BusinessDataScopeState {
-        val persisted = businessDataScopeBindingDao.get()?.toOwnerStoreScope()
+        val storedBinding = businessDataScopeBindingDao.get()
+        val persisted = storedBinding?.toOwnerStoreScope()
         return if (
             persisted != null &&
             Task126OwnerStoreGate.validate(persisted, expectedScope) == Task126OwnerStoreGateDecision.Allowed
@@ -3776,7 +3953,9 @@ class DefaultInventoryRepository(
                 if (syncRecoveryJournalDao.get() != null) {
                     Task126BusinessDataScopeState(Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
                         boundScope=persisted,errorCode="sync_recovery_required")
-                } else if (hasStructurallyUsableLocalSnapshot(persisted)) {
+                } else if (hasStructurallyUsableLocalSnapshot(
+                        persisted, ordinaryBinding = ordinaryBinding?.takeIf { it == storedBinding }
+                    )) {
                     Task126BusinessDataScopeState.ready(persisted)
                 } else {
                     val now = System.currentTimeMillis()
@@ -3814,9 +3993,10 @@ class DefaultInventoryRepository(
         db.withTransaction {
             try {
             trace?.end("transaction_wait")
-            val binding = trace.span("binding") { businessDataScopeBindingDao.get()?.toOwnerStoreScope() }
-            val snapshot = trace.span("counts") { readLocalDatabaseStatusSnapshot(null, null) }
+            val storedBinding = trace.span("binding") { businessDataScopeBindingDao.get() }
+            val binding = storedBinding?.toOwnerStoreScope()
             if (binding == null) {
+                val snapshot = trace.span("counts") { readLocalDatabaseStatusSnapshot(null, null) }
                 trace?.event("scope_unavailable", "binding_missing")
                 return@withTransaction Task126BusinessDataScopeState(
                     status = if (snapshot.isCompletelyEmptyForBinding) Task126BusinessDataScopeStatus.CHECKING
@@ -3824,14 +4004,24 @@ class DefaultInventoryRepository(
             }
             val decision = Task126OwnerStoreGate.validate(binding, activeScope)
             if (decision is Task126OwnerStoreGateDecision.Blocked) {
+                val snapshot = trace.span("counts") { readLocalDatabaseStatusSnapshot(null, null) }
                 trace?.event("scope_unavailable", "owner_store_blocked")
                 return@withTransaction blockedBusinessDataScopeState(decision.reason, binding, snapshot)
             }
             val journal = trace.span("journal") { syncRecoveryJournalDao.get() }
             val eligibleJournal = journal == null || (journal.ownerHash == binding.ownerHash &&
                 journal.storeScope == binding.storeId && journal.authorizationMode == SyncRecoveryAuthorizationModes.SAME_SCOPE)
+            var reusedQualification = false
             val usable = (trace?.fact("journal_ineligible") { eligibleJournal } ?: eligibleJournal) &&
-                hasStructurallyUsableLocalSnapshot(binding)
+                hasStructurallyUsableLocalSnapshot(
+                    binding, ordinaryBinding = storedBinding.takeIf { journal == null },
+                    onQualificationReused = { reusedQualification = true }
+                )
+            // Options fetches counts on demand. Preserve the local snapshot for
+            // the original validator without making a durable hit wait for it.
+            val snapshot = if (!reusedQualification) {
+                trace.span("counts") { readLocalDatabaseStatusSnapshot(null, null) }
+            } else null
             Task126BusinessDataScopeState(
                 status = Task126BusinessDataScopeStatus.CHECKING, boundScope = binding,
                 localSnapshot = snapshot, localAccessScope = binding.takeIf { usable },
@@ -3852,23 +4042,23 @@ class DefaultInventoryRepository(
         }
 
     /** Local provenance and structure survive legitimate offline edits; cloud body digests do not. */
-    private suspend fun hasStructurallyUsableLocalSnapshot(scope: Task126OwnerStoreScope): Boolean {
+    private suspend fun hasStructurallyUsableLocalSnapshot(
+        scope: Task126OwnerStoreScope,
+        domain: ScopedReadDomain? = null,
+        ordinaryBinding: BusinessDataScopeBinding? = null,
+        onQualificationReused: () -> Unit = {}
+    ): Boolean {
         val trace = coroutineContext[LocalStartupTrace]
         val sql = db.openHelper.readableDatabase
-        val quickValid = trace.span("quick_check") {
-            sql.query("PRAGMA quick_check(1)").use { it.moveToFirst() && it.getString(0) == "ok" }
-        }
-        if (!quickValid) { trace?.event("scope_unavailable", "quick_check_failed"); return false }
-        val foreignKeyFailure = trace.span("foreign_key") { sql.query("PRAGMA foreign_key_check").use { it.moveToFirst() } }
-        if (foreignKeyFailure) { trace?.event("scope_unavailable", "foreign_key_failed"); return false }
-        val baseline = trace.span("baseline") { syncRecoveryBaselineDao.get() } ?: return true
-        trace?.generation(baseline.generationId)
-        if (baseline.ownerHash != scope.ownerHash || baseline.storeScope != scope.storeId ||
-            shopIdFromStoreScope(scope.storeId)?.lowercase() != baseline.shopId.lowercase() ||
-            syncEventDeviceStateDao.get()?.deviceId != baseline.deviceId) {
-            trace?.event("scope_unavailable", "baseline_scope_mismatch"); return false
-        }
         return try {
+            val baseline = trace.span("baseline") { syncRecoveryBaselineDao.get() }
+                ?: return domain == null && checkLocalSnapshotStructure(domain, trace)
+            trace?.generation(baseline.generationId)
+            if (baseline.ownerHash != scope.ownerHash || baseline.storeScope != scope.storeId ||
+                shopIdFromStoreScope(scope.storeId)?.lowercase() != baseline.shopId.lowercase() ||
+                syncEventDeviceStateDao.get()?.deviceId != baseline.deviceId) {
+                trace?.event("scope_unavailable", "baseline_scope_mismatch"); return false
+            }
             val checkpoint = decodeRecoveryCheckpointJson(baseline.checkpointJson)
             if (checkpoint.scope.accountKey != scope.ownerHash || checkpoint.scope.deviceKey != task126OwnerHash(baseline.deviceId) ||
                 checkpoint.scope.kind != baseline.scopeKind || checkpoint.scope.key != baseline.scopeKey ||
@@ -3885,10 +4075,60 @@ class DefaultInventoryRepository(
             }
             if (!watermarkValid) { trace?.event("scope_unavailable", "watermark_invalid"); return false }
             validateRecoveryCheckpointResourceBounds(checkpoint, DEFAULT_SHOP_SYNC_RECOVERY_RESOURCE_LIMITS)
-            validateShopSyncOrdinaryLocalProof(db, baseline.generationId, checkpoint)
+            val qualification = db.ordinaryLocalQualification?.takeIf {
+                domain == null && ordinaryBinding != null && db.inTransaction()
+            }
+            val scopeKey = if (qualification != null && ordinaryBinding != null) {
+                // The witness identifies a body proven under this binding and
+                // generation. Current auth and device permission are checked
+                // by the existing publisher both before and after admission.
+                task126OwnerHash(listOf(
+                    ordinaryBinding.ownerHash, ordinaryBinding.storeId, ordinaryBinding.localStoreId,
+                    ordinaryBinding.syncProtocolVersion, ordinaryBinding.schemaVersion,
+                    ordinaryBinding.storeEpoch, ordinaryBinding.boundAtMs, sql.version,
+                    task126OwnerHash(baseline.deviceId), baseline.generationId,
+                    task126OwnerHash(baseline.checkpointJson)
+                ).joinToString("\n") { "${it.toString().length}:$it" })
+            } else null
+            val physicalBefore = trace.span("durable_qualification_fingerprint") { qualification?.fingerprint() }
+            if (scopeKey != null && physicalBefore != null && qualification?.matches(scopeKey, physicalBefore) == true) {
+                trace?.event("durable_qualification_hit")
+                onQualificationReused()
+                return true
+            }
+            if (qualification != null) trace?.event("durable_qualification_miss")
+            if (!checkLocalSnapshotStructure(domain, trace)) return false
+            when (domain) {
+                ScopedReadDomain.HISTORY -> validateShopSyncCommittedHistoryProof(db, baseline.generationId, checkpoint)
+                ScopedReadDomain.CATALOG -> validateShopSyncCommittedCatalogProof(db, baseline.generationId, checkpoint)
+                null -> validateShopSyncOrdinaryLocalProof(db, baseline.generationId, checkpoint)
+            }
+            if (scopeKey != null && physicalBefore != null && qualification != null &&
+                qualification.fingerprint() == physicalBefore && qualification.record(scopeKey, physicalBefore)) {
+                trace?.event("durable_qualification_minted")
+            }
             true
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { trace?.event("scope_unavailable", "validation_failed"); false }
+    }
+
+    private fun checkLocalSnapshotStructure(domain: ScopedReadDomain?, trace: LocalStartupTrace?): Boolean {
+        val sql = db.openHelper.readableDatabase
+        val quickValid = trace.span("quick_check") {
+            sql.query("PRAGMA quick_check(1)").use { it.moveToFirst() && it.getString(0) == "ok" }
+        }
+        if (!quickValid) { trace?.event("scope_unavailable", "quick_check_failed"); return false }
+        val foreignKeyFailure = trace.span("foreign_key") {
+            val pragmas = when (domain) {
+                ScopedReadDomain.HISTORY -> listOf("PRAGMA foreign_key_check('history_entry_remote_refs')")
+                ScopedReadDomain.CATALOG -> listOf("products", "product_remote_refs", "supplier_remote_refs", "category_remote_refs")
+                    .map { "PRAGMA foreign_key_check('$it')" }
+                null -> listOf("PRAGMA foreign_key_check")
+            }
+            pragmas.any { pragma -> sql.query(pragma).use { it.moveToFirst() } }
+        }
+        if (foreignKeyFailure) trace?.event("scope_unavailable", "foreign_key_failed")
+        return !foreignKeyFailure
     }
 
     private fun blockedBusinessDataScopeState(
@@ -8619,7 +8859,9 @@ class DefaultInventoryRepository(
         return fresh.row != null && fresh.row.deletedAt == null && productRemoteRefDao.getByProductId(ref.productId) == ref
     }
 
-    private suspend fun localResolutionIdentity(): Pair<BusinessResolutionScope, SyncRecoveryBaseline>? {
+    private suspend fun localResolutionIdentity(
+        resolveScope: suspend (String, String) -> Pair<BusinessResolutionScope, SyncRecoveryBaseline> = ::catalogResolutionScope
+    ): Pair<BusinessResolutionScope, SyncRecoveryBaseline>? {
         val baseline = db.syncRecoveryBaselineDao().get() ?: run {
             val hasEvidence = db.openHelper.readableDatabase.query(
                 "SELECT 1 FROM sync_event_outbox WHERE eventType=? LIMIT 1", arrayOf(BUSINESS_RESOLUTION_EVENT)).use { it.moveToFirst() }
@@ -8632,7 +8874,7 @@ class DefaultInventoryRepository(
             buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }
         }.filter { task126OwnerHash(it) == binding.ownerHash }.distinct()
         require(owners.size == 1) { "resolution_owner_provenance_missing" }
-        return catalogResolutionScope(owners.single(), baseline.shopId)
+        return resolveScope(owners.single(), baseline.shopId)
     }
 
     private suspend fun effectiveCatalogDecision(ref: ProductRemoteRef): BusinessResolutionRecord? {

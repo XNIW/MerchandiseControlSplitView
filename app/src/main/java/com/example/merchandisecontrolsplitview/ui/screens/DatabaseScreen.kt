@@ -382,6 +382,7 @@ fun DatabaseScreen(
                             appliedFilterForObservation = appliedProductFilter,
                             products = products,
                             productDetailsOverrides = productDetailsOverrides,
+                            observePriceSummary = viewModel::observePriceSummaryForProduct,
                             productImageStates = productImageStates,
                             storefrontSummaries = storefrontSummaries,
                             storefrontFilter = storefrontFilter,

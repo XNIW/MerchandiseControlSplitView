@@ -3,6 +3,7 @@ package com.example.merchandisecontrolsplitview.ui.navigation
 import android.app.Application
 import android.content.Context
 import android.content.ContextWrapper
+import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.*
@@ -17,6 +18,8 @@ import com.example.merchandisecontrolsplitview.ui.theme.MerchandiseControlTheme
 import io.github.jan.supabase.auth.status.SessionStatus
 import io.github.jan.supabase.auth.SignOutScope
 import java.util.concurrent.atomic.AtomicInteger
+import org.apache.poi.xssf.usermodel.XSSFWorkbook
+import java.io.File
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.*
@@ -29,7 +32,7 @@ import org.junit.runner.RunWith
 class SafeLocalStoreRootDeviceTest {
     @get:Rule val compose = createComposeRule()
 
-    @Test fun checkingAndUnavailableRootKeepOptionsAccountAndSafeDetailsWithoutBusinessGetters() {
+    @Test fun checkingAndUnavailableRootKeepRawImportAndOptionsWithoutBusinessGetters() {
         val target = InstrumentationRegistry.getInstrumentation().targetContext
         check(target.applicationContext.javaClass == Application::class.java) { "Dedicated neutral runner required" }
         val businessAccesses = AtomicInteger()
@@ -67,15 +70,25 @@ class SafeLocalStoreRootDeviceTest {
         val appScope = field("appScope").get(ownedApp) as CoroutineScope
         try {
             compose.setContent {
-                CompositionLocalProvider(LocalContext provides ownedContext) {
+                val activityResultRegistryOwner = checkNotNull(LocalActivityResultRegistryOwner.current)
+                CompositionLocalProvider(
+                    LocalContext provides ownedContext,
+                    LocalActivityResultRegistryOwner provides activityResultRegistryOwner
+                ) {
                     MerchandiseControlTheme(darkTheme = false) { AppNavGraph() }
                 }
             }
-            compose.onNodeWithText(target.getString(R.string.local_store_open_checking)).assertIsDisplayed()
+            compose.onNodeWithText(target.getString(R.string.load_excel_file)).assertIsDisplayed()
+            compose.onNodeWithText(target.getString(R.string.add_products_manually)).assertIsNotEnabled()
+            compose.onNodeWithTag("root-tab-history").performClick()
+            compose.onNodeWithTag("route-context-history").assertIsDisplayed()
+            assertEquals(0, businessAccesses.get())
+            compose.onNodeWithTag("root-tab-optionsScreen").performClick()
+            compose.onAllNodesWithText(target.getString(R.string.local_store_open_checking)).onFirst().assertIsDisplayed()
             compose.onNodeWithTag("local-store-open-retry").assertDoesNotExist()
             assertEquals(0, businessAccesses.get())
             compose.runOnIdle { availability.value = LocalStoreAvailability.Unavailable("controlled") }
-            compose.onNodeWithText(target.getString(R.string.local_store_open_unavailable)).assertIsDisplayed()
+            compose.onAllNodesWithText(target.getString(R.string.local_store_open_unavailable)).onFirst().assertIsDisplayed()
             compose.onNodeWithTag("local-store-open-retry").assertDoesNotExist()
             compose.onNodeWithTag("local-store-open-details").performClick()
             compose.onNodeWithTag("local-store-open-details-value").assertTextEquals(target.getString(
@@ -90,8 +103,36 @@ class SafeLocalStoreRootDeviceTest {
             compose.onNodeWithText(target.getString(R.string.close)).performClick()
             compose.onNodeWithText(target.getString(R.string.select_theme)).performScrollTo().assertIsDisplayed()
             compose.onNodeWithText(target.getString(R.string.select_language)).performScrollTo().assertIsDisplayed()
-            compose.onNodeWithText(target.getString(R.string.account_section_title)).performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText(target.getString(R.string.account_cloud_sync_section_title)).performScrollTo().assertIsDisplayed()
+            // Share parsing and column mapping use the RAM owner while all business lazies are traps.
+            val source = File(target.cacheDir, "bootstrap-shell-import.xlsx")
+            XSSFWorkbook().use { book ->
+                val sheet = book.createSheet("Input")
+                sheet.createRow(0).apply {
+                    createCell(0).setCellValue("Barcode"); createCell(1).setCellValue("Product Name")
+                    createCell(2).setCellValue("Purchase Price")
+                }
+                sheet.createRow(1).apply {
+                    createCell(0).setCellValue("BOOTSTRAP-RAW"); createCell(1).setCellValue("RAM only")
+                    createCell(2).setCellValue(4.0)
+                }
+                source.outputStream().use { book.write(it) }
+            }
+            compose.runOnIdle {
+                availability.value = LocalStoreAvailability.Checking
+                check(com.example.merchandisecontrolsplitview.MainActivity.ShareBus.uris.tryEmit(listOf(android.net.Uri.fromFile(source))))
+            }
+            compose.waitUntil(30_000) { compose.onAllNodesWithText(target.getString(R.string.preview_file_title)).fetchSemanticsNodes().isNotEmpty() }
+            compose.waitUntil(30_000) { compose.onAllNodes(hasScrollToKeyAction()).fetchSemanticsNodes().size == 1 }
+            compose.onNode(hasScrollToKeyAction()).performScrollToKey("supplier")
+            compose.onNode(hasSetTextAction() and hasText(target.getString(R.string.search_or_add_supplier)))
+                .performClick().performTextReplacement("Typed while DB held")
+            val draftInput = hasSetTextAction() and hasText("Typed while DB held")
+            compose.onNode(draftInput).assertIsFocused()
+            compose.runOnIdle { availability.value = LocalStoreAvailability.Unavailable("local_store_open_failed") }
+            compose.onNode(draftInput).assertIsDisplayed().assertIsFocused()
             assertEquals(0, businessAccesses.get())
+            source.delete() // only this fixture-owned cache input
             businessNames.forEach { name -> assertFalse((field("$name\$delegate").get(ownedApp) as Lazy<*>).isInitialized()) }
         } finally {
             auth.shutdown()

@@ -2,6 +2,24 @@ package com.example.merchandisecontrolsplitview.data
 
 import androidx.paging.PagingSource
 import androidx.room.*
+import kotlinx.coroutines.flow.Flow
+
+private const val CURRENT_PRODUCT_DETAILS = """
+    SELECT p.*, s.name AS supplier_name, c.name AS category_name,
+           NULL AS lastPurchase, NULL AS prevPurchase, NULL AS lastRetail, NULL AS prevRetail
+    FROM products p
+    LEFT JOIN suppliers s ON p.supplierId = s.id
+    LEFT JOIN categories c ON p.categoryId = c.id
+"""
+
+private const val CURRENT_PRODUCT_FILTER = """
+    (:filter IS NULL
+       OR p.barcode LIKE '%' || :filter || '%'
+       OR p.productName LIKE '%' || :filter || '%'
+       OR s.name LIKE '%' || :filter || '%'
+       OR p.itemNumber LIKE '%' || :filter || '%'
+       OR c.name LIKE '%' || :filter || '%')
+"""
 
 @Dao
 interface ProductDao {
@@ -99,6 +117,12 @@ interface ProductDao {
         WHERE p.id IN (:productIds)
     """)
     suspend fun getDetailsByIds(productIds: List<Long>): List<ProductWithDetails>
+
+    @Query(CURRENT_PRODUCT_DETAILS + " WHERE p.id IN (:productIds)")
+    suspend fun getCurrentDetailsByIds(productIds: List<Long>): List<ProductWithDetails>
+
+    @Query("SELECT * FROM product_price_summary WHERE productId = :productId")
+    fun observePriceSummaryForProduct(productId: Long): Flow<ProductPriceSummary?>
 
     /**
      * Task 041 (hardening): match barcode tollerante a whitespace sul lato locale.
@@ -287,7 +311,18 @@ ORDER BY p.id ASC
         productIds: List<Long>
     ): PagingSource<Int, ProductWithDetails>
 
+    @Transaction
+    @Query(CURRENT_PRODUCT_DETAILS +
+        " WHERE (:applyProductIds = 0 OR p.id IN (:productIds)) AND " + CURRENT_PRODUCT_FILTER +
+        " ORDER BY p.id ASC")
+    fun getCurrentDetailsPaged(
+        filter: String?,
+        applyProductIds: Boolean,
+        productIds: List<Long>
+    ): PagingSource<Int, ProductWithDetails>
 
+    @Query(CURRENT_PRODUCT_DETAILS + " WHERE " + CURRENT_PRODUCT_FILTER + " ORDER BY p.id ASC LIMIT :limit OFFSET :offset")
+    suspend fun getCurrentDetailsPage(filter: String?, limit: Int, offset: Long): List<ProductWithDetails>
 
     @Transaction
     suspend fun applyImport(newProducts: List<Product>, updatedProducts: List<Product>) {

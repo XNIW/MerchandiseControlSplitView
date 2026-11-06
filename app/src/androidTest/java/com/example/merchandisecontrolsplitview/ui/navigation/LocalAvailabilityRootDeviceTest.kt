@@ -2,6 +2,7 @@ package com.example.merchandisecontrolsplitview.ui.navigation
 
 import android.graphics.Bitmap
 import android.app.Application
+import android.content.Context
 import android.os.SystemClock
 import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks
 import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks.Event
@@ -10,6 +11,7 @@ import com.example.merchandisecontrolsplitview.productimage.ProductImageService
 import java.io.FileOutputStream
 import java.time.Instant
 import java.util.UUID
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.compose.foundation.layout.Box
@@ -318,7 +320,7 @@ class LocalAvailabilityRootDeviceTest {
                 val checking = business.copy(status = Task126BusinessDataScopeStatus.CHECKING,
                     localAccessScope = null, localReadsAllowed = false, localWritesAllowed = false)
                 compose.runOnIdle { liveTracker.updateBusinessDataScopeState(checking) }
-                compose.onNode(draftField).assertDoesNotExist() // no unqualified business render
+                compose.onNode(draftField).assertIsDisplayed().assertIsFocused() // unbound raw input remains usable; business suggestions/writes are withdrawn
                 compose.onNodeWithTag("root-tab-optionsScreen").assertDoesNotExist()
                 witness("checking", checking)
                 val waiting = checking.copy(status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE,
@@ -473,7 +475,10 @@ class LocalAvailabilityRootDeviceTest {
                 witness("checking", checking)
                 compose.onNodeWithTag("root-business-placeholder").assertDoesNotExist()
                 // Route-specific context is an explicit presentation contract, not a TalkBack proof.
-                compose.onNodeWithTag("route-context-$contextualRoute").assertIsDisplayed()
+                if (contextualRoute == Screen.FilePicker.route || contextualRoute == Screen.PreGenerate.route) {
+                    compose.onNodeWithTag("route-context-$contextualRoute").assertDoesNotExist()
+                    input?.let { compose.onNode(it).assertIsDisplayed() }
+                } else compose.onNodeWithTag("route-context-$contextualRoute").assertIsDisplayed()
                 if (editorWindow) {
                     compose.onAllNodes(isDialog()).assertCountEquals(0)
                     compose.onNodeWithTag("task141.edit.dialog-root").assertDoesNotExist()
@@ -487,7 +492,10 @@ class LocalAvailabilityRootDeviceTest {
                 val waiting = checking.copy(status = Task126BusinessDataScopeStatus.ERROR_RECOVERABLE, errorCode = "controlled_requalification_wait")
                 compose.runOnIdle { liveTracker.updateBusinessDataScopeState(waiting) }
                 witness("waiting", waiting)
-                compose.onNodeWithTag("route-context-$contextualRoute").assertIsDisplayed()
+                if (contextualRoute == Screen.FilePicker.route || contextualRoute == Screen.PreGenerate.route) {
+                    compose.onNodeWithTag("route-context-$contextualRoute").assertDoesNotExist()
+                    input?.let { compose.onNode(it).assertIsDisplayed() }
+                } else compose.onNodeWithTag("route-context-$contextualRoute").assertIsDisplayed()
                 compose.onNodeWithTag("root-business-placeholder").assertDoesNotExist()
                 compose.runOnIdle { liveTracker.updateBusinessDataScopeState(business) }
                 compose.waitForIdle()
@@ -1331,6 +1339,309 @@ class LocalAvailabilityRootDeviceTest {
         }
     }
 
+    @Test fun actualStoredHistoryOpensBeforeUnrelatedPricesRelease() =
+        runRootWhileDomainHeld(ShopSyncRowDomain.PRICES)
+
+    @Test fun actualCatalogSearchAndSaveBeforeUnrelatedHistoryRelease() =
+        runRootWhileDomainHeld(ShopSyncRowDomain.HISTORY)
+
+    @Test fun actualReadOnlyCatalogSearchWhileHistoryAndPricesUnqualified() =
+        runRootWhileDomainHeld(ShopSyncRowDomain.HISTORY, corruptUnrelatedDomains = true)
+
+    @Test fun durableOrdinaryQualificationReopensAndRejectsUntrackedPriceWrite() = runBlocking {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        check(instrumentation.javaClass == MobileSyncPerformanceTestRunner::class.java)
+        check(context.applicationContext.javaClass == Application::class.java)
+        ownsT20Fixture = true
+        val owned = T20IsolatedDatabaseContext(
+            context, File(context.cacheDir, "task146-durable-qualification-${UUID.randomUUID()}")
+        )
+        println("TASK146_DURABLE_QUALIFICATION_OWNED_ROOT ${owned.root.path}")
+        fun open() = AppDatabase.openOrdinaryDatabase(owned, DB_NAME).also {
+            database = it
+            it.openHelper.writableDatabase
+        }
+        val first = open()
+        val remote = RootDomainHoldRemote(ShopSyncRowDomain.PRICES)
+        val repository = DefaultInventoryRepository(first)
+        first.syncEventDeviceStateDao().insert(SyncEventDeviceState(deviceId = DEVICE, createdAtMs = 1L))
+        first.syncRecoveryJournalDao().upsert(journal(SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED))
+        assertTrue(coordinator(first, repository, remote, databaseContext = owned)
+            .recover(OWNER, shop(), ownerScope()) is ShopSyncRecoveryResult.Activated)
+        assertNull(first.syncRecoveryJournalDao().get())
+        // This fixture starts from a settled SQLite cache. Ordinary process
+        // launch timing is measured separately through MainActivity.
+        first.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(TRUNCATE)").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(0, it.getInt(0))
+        }
+        val trace = mutableListOf<String>()
+        assertTrue(repository.resolveOfflineBusinessDataScope(
+            ownerScope(), canWrite = true, startupTrace = LocalStartupTrace(null, sink = { trace.add(it) })
+        ).allowsLocalOperations)
+        assertTrue(trace.toString(), trace.any { "stage=durable_qualification_minted" in it })
+        first.close()
+
+        val reopened = open()
+        val relaunched = DefaultInventoryRepository(reopened)
+        trace.clear()
+        val readOnly = relaunched.resolveOfflineBusinessDataScope(
+            ownerScope(), canWrite = false, startupTrace = LocalStartupTrace(null, sink = { trace.add(it) })
+        )
+        assertTrue(readOnly.allowsLocalOperations)
+        assertFalse(readOnly.localWritesAllowed)
+        assertFalse(readOnly.allowsCloudSync)
+        assertTrue(trace.toString(), trace.any { "stage=durable_qualification_hit" in it })
+        assertFalse(trace.toString(), trace.any { "stage=quick_check" in it || "stage=receipt " in it })
+        assertNotNull(reopened.productDao().findByBarcode(remote.product.barcode))
+
+        // Direct SQL intentionally bypasses repository writer participation.
+        // The old qualification cannot hide a changed body with the same ledger.
+        reopened.openHelper.writableDatabase.execSQL("UPDATE product_prices SET note = 'untracked price write'")
+        trace.clear()
+        assertFalse(relaunched.resolveOfflineBusinessDataScope(
+            ownerScope(), canWrite = true, startupTrace = LocalStartupTrace(null, sink = { trace.add(it) })
+        ).allowsLocalOperations)
+        assertTrue(trace.toString(), trace.any { "stage=durable_qualification_miss" in it })
+        assertTrue(trace.toString(), trace.any { "stage=quick_check" in it })
+        assertEquals(1, reopened.productPriceDao().countAll())
+    }
+
+    private fun runRootWhileDomainHeld(
+        heldDomain: ShopSyncRowDomain,
+        corruptUnrelatedDomains: Boolean = false
+    ) {
+        val catalogProbe = heldDomain == ShopSyncRowDomain.HISTORY
+        val wholeStoreQualified = catalogProbe && !corruptUnrelatedDomains
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        check(instrumentation.javaClass == MobileSyncPerformanceTestRunner::class.java)
+        check(context.applicationContext.javaClass == Application::class.java)
+        // Reuse the existing private per-run Room context. Preserve this fixture on failure.
+        ownsT20Fixture = true
+        val owned = T20IsolatedDatabaseContext(context, File(context.cacheDir, "task146-history-held-${UUID.randomUUID()}"))
+        val db = Room.databaseBuilder(owned, AppDatabase::class.java, DB_NAME)
+            .addMigrations(*AppDatabase.PRODUCTION_MIGRATIONS.toTypedArray()).build()
+            .also { database = it; it.openHelper.writableDatabase }
+        println("TASK146_HISTORY_HELD_OWNED_ROOT ${owned.root.path}")
+        val remote = RootDomainHoldRemote(heldDomain)
+        val initial = DefaultInventoryRepository(db)
+        val original = runBlocking {
+            db.syncEventDeviceStateDao().insert(SyncEventDeviceState(deviceId = DEVICE, createdAtMs = 1L))
+            db.syncRecoveryJournalDao().upsert(journal(SyncRecoveryAuthorizationModes.MISMATCH_REPLACE_CONFIRMED))
+            assertTrue(coordinator(db, initial, remote, databaseContext = owned)
+                .recover(OWNER, shop(), ownerScope()) is ShopSyncRecoveryResult.Activated)
+            assertTrue(initial.resolveBusinessDataScope(ownerScope()).allowsLocalOperations)
+            val baseline = requireNotNull(db.syncRecoveryBaselineDao().get())
+            val stored = db.historyEntryDao().getAllUserVisibleSnapshot().single()
+            assertEquals(remote.session.displayName, stored.displayName)
+            assertEquals(remote.session.data, stored.data)
+            assertEquals(remote.session.sessionOverlay?.editable, stored.editable)
+            assertEquals(remote.session.sessionOverlay?.complete, stored.complete)
+            assertEquals(1, db.productPriceDao().countAll())
+            db.withTransaction {
+                if (!wholeStoreQualified) {
+                    db.openHelper.writableDatabase.execSQL(
+                        "UPDATE product_prices SET note = 'owned unrelated price mismatch'"
+                    )
+                }
+                if (corruptUnrelatedDomains) {
+                    db.openHelper.writableDatabase.execSQL(
+                        "UPDATE history_entries SET displayName = 'owned unrelated History mismatch'"
+                    )
+                }
+                db.syncRecoveryJournalDao().upsert(journal(SyncRecoveryAuthorizationModes.SAME_SCOPE))
+            }
+            baseline to db.historyEntryDao().getAllUserVisibleSnapshot().single()
+        }
+        val heldState = runBlocking {
+            initial.resolveOfflineBusinessDataScope(ownerScope(), canWrite = wholeStoreQualified)
+        }
+        assertEquals("Actual whole-store qualification before transport release",
+            wholeStoreQualified, heldState.allowsLocalOperations)
+        assertFalse(heldState.allowsCloudSync)
+        assertTrue(heldState.localReadsAllowed)
+        assertEquals(wholeStoreQualified, heldState.localWritesAllowed)
+        val tracker = CatalogSyncStateTracker(heldState)
+        val repository = DefaultInventoryRepository(db, tracker)
+        val ownedApp = object : MerchandiseControlApplication() {
+            fun attach() = attachBaseContext(owned)
+        }.apply { attach() }
+        fun install(name: String, value: Any?) = MerchandiseControlApplication::class.java
+            .getDeclaredField(name).apply { isAccessible = true }.set(ownedApp, value)
+        val ownedScope: CoroutineScope = scopeSwitchField(ownedApp, "appScope")
+        val auth = SupabaseAuthManager(client = null, googleWebClientId = "", scope = ownedScope)
+        val images = ProductImageService(owned, db, ProductImageApiClient("", "", debugBuild = true),
+            accountIdProvider = { OWNER }, selectedShopProvider = ::shop,
+            accessTokenProvider = { null }, businessDataScopeAllowed = tracker::allowsBusinessDataScope,
+            businessDataScopeRuntimeGuard = tracker)
+        var recovery: Deferred<ShopSyncRecoveryResult>? = null
+        try {
+            val signedIn = AuthState.SignedIn(OWNER, "history-held@example.invalid")
+            scopeSwitchField<MutableStateFlow<AuthState>>(auth, "_state").value = signedIn
+            val selected = object : SelectedShopStore {
+                override fun getSelectedShopId(ownerUserId: String) = SHOP
+                override fun setSelectedShopId(ownerUserId: String, shopId: String) { check(shopId == SHOP) }
+                override fun clearSelectedShopId(ownerUserId: String) = Unit
+            }
+            val linked = object : LinkedShopRemoteDataSource {
+                override val isConfigured = true
+                override suspend fun fetchLinkedShops() = Result.success(listOf(LinkedShop(
+                    SHOP, "ROOT", "Isolated root test", "shop_owner", "active",
+                    membershipStatus = "active", shopStatus = "active", selectable = true, canWrite = true)))
+            }
+            val shops = ShopContextRepository(linked, selected, { OWNER }, { DEVICE })
+            runBlocking { shops.refresh(OWNER) }
+            assertTrue(shops.state.value.localAccessAllowed)
+            install("database\$delegate", lazyOf(db))
+            install("repository\$delegate", lazyOf(repository))
+            install("authManager\$delegate", lazyOf(auth))
+            install("shopContextRepository\$delegate", lazyOf(shops))
+            install("catalogSyncStateTracker\$delegate", lazyOf(tracker))
+            install("supabaseClient\$delegate", lazyOf(null))
+            install("productImageServiceDelegate", lazyOf(images))
+
+            lateinit var dbVm: DatabaseViewModel
+            lateinit var excelVm: ExcelViewModel
+            compose.runOnUiThread {
+                dbVm = DatabaseViewModel(ownedApp, repository, storefrontEnabled = false)
+                excelVm = ExcelViewModel(ownedApp, repository)
+                store.put("history-held-database", dbVm)
+                store.put("history-held-excel", excelVm)
+            }
+            val holdEntered = CompletableDeferred<ShopSyncRpcContext>()
+            remote.hold = holdEntered to release
+            val activeRecovery = scope.async {
+                coordinator(db, repository, remote, tracker, owned).recover(OWNER, shop(), ownerScope())
+            }
+            recovery = activeRecovery
+            val rpc = runBlocking { withTimeout(10_000L) { holdEntered.await() } }
+            assertEquals(OWNER, rpc.accountId)
+            assertEquals(SHOP, rpc.shopId)
+            assertEquals(DEVICE, rpc.deviceIdentifier)
+            val heldEventDomain = if (catalogProbe) SyncEventDomains.HISTORY else SyncEventDomains.PRICES
+            assertEquals(remote.checkpoint.syncEvents.domainMaxIds[heldEventDomain], rpc.expectedDomainEventMaxId)
+            assertEquals(SyncRecoveryJournalPhases.STAGING, runBlocking { db.syncRecoveryJournalDao().get()?.phase })
+            assertTrue(activeRecovery.isActive)
+            assertFalse(release.isCompleted)
+
+            compose.setContent {
+                val state by tracker.businessDataScopeState.collectAsState()
+                val progress by tracker.state.collectAsState()
+                val currentAuth by auth.state.collectAsState()
+                val currentShop by shops.state.collectAsState()
+                MerchandiseControlTheme(darkTheme = false) {
+                    if (visible.value) AppNavGraphContent(ownedApp, excelVm, dbVm, true,
+                        currentAuth, progress, currentShop, state)
+                }
+            }
+            compose.onNodeWithTag("root-tab-filePicker").assertIsSelected()
+            val saved = if (corruptUnrelatedDomains) {
+                val before = runBlocking { requireNotNull(db.productDao().findByBarcode(remote.product.barcode)) }
+                val (productRow, searchElapsedNs) = searchCatalogDuringHistoryHold(dbVm, remote)
+                assertNull(productRow.fetchSemanticsNode().config.getOrNull(SemanticsActions.OnClick))
+                compose.onNodeWithText(context.getString(R.string.price_history)).assertDoesNotExist()
+                compose.onNodeWithTag("product-editor-save").assertDoesNotExist()
+                assertEquals(before, runBlocking { db.productDao().findByBarcode(before.barcode) })
+                println("TASK146_CATALOG_READ_ONLY_BEFORE_HISTORY_RELEASE searchNs=$searchElapsedNs globalRead=false phase=STAGING")
+                null
+            } else if (catalogProbe) {
+                assertCatalogSearchAndSaveDuringHistoryHold(db, dbVm, remote)
+            } else {
+                val title = requireNotNull(remote.session.displayName)
+                val storedBarcode = remote.session.data[1][0]
+                val started = SystemClock.elapsedRealtimeNanos()
+                compose.onNodeWithTag("root-tab-history").performClick().assertIsSelected()
+                compose.waitUntil(5_000L) {
+                    compose.onAllNodesWithText(title).fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithText(title).assertIsDisplayed().performClick()
+                compose.onNodeWithText(storedBarcode).assertIsDisplayed()
+                val elapsedNs = SystemClock.elapsedRealtimeNanos() - started
+                assertTrue("History stored payload took ${elapsedNs / 1_000_000} ms", elapsedNs <= 5_000_000_000L)
+                println("TASK146_HISTORY_BEFORE_PRICES_RELEASE elapsedNs=$elapsedNs globalRead=false phase=STAGING")
+                null
+            }
+            assertFalse(release.isCompleted)
+            assertTrue(activeRecovery.isActive)
+            assertEquals(wholeStoreQualified, tracker.businessDataScopeState.value.allowsLocalOperations)
+            assertFalse(tracker.businessDataScopeState.value.allowsCloudSync)
+            runBlocking {
+                assertEquals(original.first, db.syncRecoveryBaselineDao().get())
+                assertEquals(original.second, db.historyEntryDao().getAllUserVisibleSnapshot().single())
+                assertEquals(SyncRecoveryJournalPhases.STAGING, db.syncRecoveryJournalDao().get()?.phase)
+            }
+            assertTrue(release.complete(Unit))
+            val finished = runBlocking { withTimeout(15_000L) { activeRecovery.await() } }
+            assertTrue(finished.toString(), finished is ShopSyncRecoveryResult.Activated)
+            if (saved != null) {
+                assertEquals(saved, runBlocking { db.productDao().findByBarcode(saved.barcode) })
+            }
+        } finally {
+            compose.runOnUiThread { visible.value = false; store.clear() }
+            auth.shutdown()
+            images.close()
+            runBlocking { recovery?.cancelAndJoin(); ownedScope.coroutineContext[Job]?.cancelAndJoin() }
+        }
+    }
+
+    private fun assertCatalogSearchAndSaveDuringHistoryHold(
+        db: AppDatabase, viewModel: DatabaseViewModel, remote: RootDomainHoldRemote
+    ): Product {
+        val barcode = remote.product.barcode
+        val before = runBlocking { requireNotNull(db.productDao().findByBarcode(barcode)) }
+        assertNotNull(before.supplierId)
+        assertNotNull(before.categoryId)
+        val (productRow, searchElapsedNs) = searchCatalogDuringHistoryHold(viewModel, remote)
+        productRow.performClick()
+        compose.onNodeWithTag("task141.edit.dialog-root").assertExists()
+        val editedName = "Catalog saved during History hold"
+        compose.onNodeWithTag("product-editor-name").performScrollTo().performClick().performTextReplacement(editedName)
+        val saveStarted = SystemClock.elapsedRealtimeNanos()
+        compose.onNodeWithTag("product-editor-save").assertIsEnabled().performClick()
+        compose.waitUntil(5_000L) {
+            compose.onAllNodesWithTag("task141.edit.dialog-root").fetchSemanticsNodes().isEmpty()
+        }
+        val saved = runBlocking { requireNotNull(db.productDao().findByBarcode(barcode)) }
+        val saveElapsedNs = SystemClock.elapsedRealtimeNanos() - saveStarted
+        assertTrue("Catalog save took ${saveElapsedNs / 1_000_000} ms", saveElapsedNs <= 5_000_000_000L)
+        assertEquals(before.copy(productName = editedName), saved)
+        assertEquals(1, runBlocking { db.productPriceDao().countAll() })
+        assertFalse(release.isCompleted)
+        println("TASK146_CATALOG_BEFORE_HISTORY_RELEASE searchNs=$searchElapsedNs saveNs=$saveElapsedNs")
+        return saved
+    }
+
+    private fun searchCatalogDuringHistoryHold(
+        viewModel: DatabaseViewModel, remote: RootDomainHoldRemote
+    ): Pair<SemanticsNodeInteraction, Long> {
+        val barcode = remote.product.barcode
+        compose.onNodeWithTag("root-tab-databaseScreen").performClick().assertIsSelected()
+        val search = compose.onNodeWithTag("database-search")
+        val absentQuery = "D02 absent fixture"
+        search.performTextReplacement(absentQuery)
+        compose.waitUntil(5_000L) {
+            viewModel.appliedProductFilter.value == absentQuery &&
+                compose.onAllNodesWithText(context.getString(R.string.no_results_for, absentQuery))
+                    .fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText(barcode, substring = true).assertDoesNotExist()
+
+        val supplierQuery = "D02 catalog sup"
+        val searchStarted = SystemClock.elapsedRealtimeNanos()
+        search.performTextReplacement(supplierQuery)
+        compose.waitUntil(5_000L) {
+            viewModel.appliedProductFilter.value == supplierQuery &&
+                compose.onAllNodesWithText(barcode, substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        val productRow = compose.onNodeWithText(barcode, substring = true)
+        productRow.assertIsDisplayed()
+        compose.onNodeWithText(remote.supplier.name).assertExists()
+        compose.onNodeWithText(remote.category.name).assertExists()
+        val searchElapsedNs = SystemClock.elapsedRealtimeNanos() - searchStarted
+        assertTrue("Catalog search took ${searchElapsedNs / 1_000_000} ms", searchElapsedNs <= 5_000_000_000L)
+        return productRow to searchElapsedNs
+    }
+
     @Test fun actualRootTabSearchEditorSaveBeforeRecoveryReleaseThenAutomaticQueueAndReopen() {
         clearEvidence("android-root-held-draft.png","android-root-held-saved.png","android-root-held-second-draft.png","android-root-activated-draft.png","android-root-activated-saved.png")
         context.deleteDatabase(DB_NAME)
@@ -1508,7 +1819,8 @@ class LocalAvailabilityRootDeviceTest {
     private fun openDatabase() = Room.databaseBuilder(context,AppDatabase::class.java,DB_NAME)
         .addMigrations(*AppDatabase.PRODUCTION_MIGRATIONS.toTypedArray()).build().also { it.openHelper.writableDatabase }
     private fun coordinator(db: AppDatabase,repo: DefaultInventoryRepository,remote: ShopSyncReadRemoteDataSource,
-        tracker: CatalogSyncStateTracker?=null) = ShopSyncRecoveryCoordinator(context,db,repo,remote,
+        tracker: CatalogSyncStateTracker?=null, databaseContext: Context=context) =
+        ShopSyncRecoveryCoordinator(databaseContext,db,repo,remote,
         registerDeviceForRecovery={ Result.success(ShopDeviceRegistrationResult(ok=true,code="success",shopId=it)) },
         scopeStillValid={ account,selected -> account==OWNER && selected==SHOP },
         activationBoundary={ block -> if (tracker==null) block() else tracker.withBusinessDataScopeTransition { block() } },
@@ -1519,6 +1831,105 @@ class LocalAvailabilityRootDeviceTest {
         storeScope=ownerScope().storeId,shopId=SHOP,deviceId=DEVICE,authorizationMode=mode,
         phase=SyncRecoveryJournalPhases.REQUIRED,reason=if(mode==SyncRecoveryAuthorizationModes.SAME_SCOPE) "root held recovery" else SYNC_RECOVERY_REASON_MISMATCH_REPLACE_CONFIRMED,
         blockingEventId=42L,attemptCount=0,createdAtMs=1L,updatedAtMs=1L,nextRetryAtMs=1L)
+    /** The existing fixture envelope, extended with one real staged row in each relevant domain. */
+    private class RootDomainHoldRemote(
+        private val heldDomain: ShopSyncRowDomain,
+        private val empty: Task139ShopSyncRecoveryForceStopDeviceTest.EmptyRecoveryRemote =
+            Task139ShopSyncRecoveryForceStopDeviceTest.EmptyRecoveryRemote()
+    ) : ShopSyncReadRemoteDataSource by empty {
+        private val json = Json { encodeDefaults = true }
+        private val timestamp = "2026-11-01T12:00:00.000000Z"
+        private val localTimestamp = "2026-11-01 12:00:00"
+        val supplier = InventorySupplierRow("10000000-0000-4000-8000-000000000014", OWNER, SHOP,
+            "D02 catalog supplier", timestamp)
+        val category = InventoryCategoryRow("10000000-0000-4000-8000-000000000015", OWNER, SHOP,
+            "D02 catalog category", timestamp)
+        val product = InventoryProductRow(
+            id = "10000000-0000-4000-8000-000000000011", ownerUserId = OWNER, shopId = SHOP,
+            barcode = "PRICE-ONLY-FIXTURE", productName = "Unrelated price product", retailPrice = 4.0,
+            supplierId = supplier.id.takeIf { heldDomain == ShopSyncRowDomain.HISTORY },
+            categoryId = category.id.takeIf { heldDomain == ShopSyncRowDomain.HISTORY },
+            updatedAt = timestamp
+        )
+        private val price = InventoryProductPriceRow(
+            id = "10000000-0000-4000-8000-000000000012", ownerUserId = OWNER, shopId = SHOP,
+            productId = product.id, type = "RETAIL", price = 4.0, priceCanonical = "4",
+            effectiveAt = localTimestamp, createdAt = localTimestamp, source = "NATIVE_FIXTURE",
+            updatedAt = timestamp
+        )
+        private val data = listOf(
+            listOf("barcode", "productName", "purchasePrice", "quantity", "countedQuantity", "realPrice", "complete"),
+            listOf("HISTORY-STORED-LINE", "Stored session content", "4", "3", "", "", "")
+        )
+        private val overlay = SessionOverlay(editable = listOf(listOf("", ""), listOf("2", "7")),
+            complete = listOf(false, true))
+        val session = SharedSheetSessionRecord(
+            remoteId = "10000000-0000-4000-8000-000000000013", payloadVersion = SESSION_PAYLOAD_VERSION,
+            displayName = "Stored history before prices", timestamp = localTimestamp,
+            supplier = "History fixture supplier", category = "History fixture category", isManualEntry = false,
+            data = data, sessionOverlay = overlay, dataCheckpointDigest = nativeSha(json.encodeToString(data).encodeToByteArray()),
+            overlayCheckpointDigest = nativeSha(json.encodeToString(overlay).encodeToByteArray()),
+            ownerUserId = OWNER, shopId = SHOP, updatedAt = timestamp
+        )
+        private val rows = buildMap<ShopSyncRowDomain, ShopSyncRows> {
+            if (heldDomain == ShopSyncRowDomain.HISTORY) {
+                put(ShopSyncRowDomain.SUPPLIERS, ShopSyncRows.Suppliers(listOf(supplier)))
+                put(ShopSyncRowDomain.CATEGORIES, ShopSyncRows.Categories(listOf(category)))
+            }
+            put(ShopSyncRowDomain.PRODUCTS, ShopSyncRows.Products(listOf(product)))
+            put(ShopSyncRowDomain.PRICES, ShopSyncRows.Prices(listOf(price)))
+            put(ShopSyncRowDomain.HISTORY, ShopSyncRows.History(listOf(session)))
+        }
+        private val domains = rows.mapValues { (domain, material) ->
+            val manifest = material.toManifestRows("task146-history-held-seed", domain).single()
+            ShopSyncDomainCheckpoint(1, 0, shopSyncCheckpointChainDigest(listOf(manifest.idLine)),
+                shopSyncCheckpointChainDigest(listOf(manifest.versionLine)),
+                manifest.identityLine?.let { shopSyncCheckpointChainDigest(listOf(it)) })
+        }
+        private val catalog = empty.checkpoint.catalog.let { before ->
+            val suppliers = domains[ShopSyncRowDomain.SUPPLIERS] ?: before.suppliers
+            val categories = domains[ShopSyncRowDomain.CATEGORIES] ?: before.categories
+            val products = domains.getValue(ShopSyncRowDomain.PRODUCTS)
+            val digest = nativeSha(listOf(suppliers.versionDigest, categories.versionDigest,
+                products.versionDigest).joinToString("\n").encodeToByteArray())
+            before.copy(suppliers = suppliers, categories = categories, products = products, digest = digest)
+        }
+        val checkpoint = empty.checkpoint.copy(catalog = catalog,
+            prices = domains.getValue(ShopSyncRowDomain.PRICES), history = domains.getValue(ShopSyncRowDomain.HISTORY),
+            checkpointDigest = nativeSha(domains.values.joinToString("\n") { it.versionDigest }.encodeToByteArray()))
+        @Volatile var hold: Pair<CompletableDeferred<ShopSyncRpcContext>, CompletableDeferred<Unit>>? = null
+
+        override suspend fun checkpoint(context: ShopSyncRpcContext): Result<ShopSyncRecoveryCheckpoint> =
+            Result.success(checkpoint.copy(syncEvents = checkpoint.syncEvents.copy(
+                verifiedBaselineId = context.verifiedBaselineId)))
+
+        override suspend fun convergenceMarker(context: ShopSyncRpcContext): Result<ShopSyncConvergenceMarker> =
+            empty.convergenceMarker(context).map { it.copy(catalog = checkpoint.catalog, prices = checkpoint.prices,
+                history = checkpoint.history, checkpointDigest = checkpoint.checkpointDigest) }
+
+        override suspend fun recoveryPage(
+            context: ShopSyncRpcContext, domain: ShopSyncRowDomain, afterId: String?, limit: Int
+        ): Result<ShopSyncRecoveryPage> {
+            check(context.accountId == OWNER && context.shopId == SHOP && context.deviceIdentifier == DEVICE)
+            if (domain == heldDomain) hold?.let { (entered, release) ->
+                check(entered.complete(context))
+                release.await()
+            }
+            return empty.recoveryPage(context, domain, afterId, limit).map { page ->
+                val material = rows[domain] ?: return@map page
+                val rowBytes = when (domain) {
+                    ShopSyncRowDomain.SUPPLIERS -> json.encodeToString(supplier)
+                    ShopSyncRowDomain.CATEGORIES -> json.encodeToString(category)
+                    ShopSyncRowDomain.PRODUCTS -> json.encodeToString(product)
+                    ShopSyncRowDomain.PRICES -> json.encodeToString(price)
+                    ShopSyncRowDomain.HISTORY -> json.encodeToString(session)
+                    else -> error("Unexpected test material domain")
+                }.encodeToByteArray().size.toLong()
+                page.copy(rows = material, responseBytes = rowBytes + 2, largestRowBytes = rowBytes)
+            }
+        }
+    }
+
     private companion object {
         const val DB_NAME="task143-local-availability-root.db"
         const val OWNER="10000000-0000-4000-8000-000000000001"
