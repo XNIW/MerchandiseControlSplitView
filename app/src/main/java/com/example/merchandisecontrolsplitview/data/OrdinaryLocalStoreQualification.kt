@@ -26,18 +26,28 @@ internal class OrdinaryLocalStoreQualification(
     private val witnessDirectory: File
 ) {
     private data class FileIdentity(val device: Long, val inode: Long)
-
-    @Volatile private var openedMain: FileIdentity? = null
+    private data class StoreStamp(val main: FileIdentity, val contentFence: String, val fingerprint: String)
+    private data class OpenedStore(val main: FileIdentity, val before: String?, val after: String?)
 
     private val wal = File(databaseFile.path + "-wal")
     private val shm = File(databaseFile.path + "-shm")
     private val rollbackJournal = File(databaseFile.path + "-journal")
     private val witness = File(witnessDirectory, "${databaseFile.name}.ordinary-local-store-v$VERSION")
+    private val beforeOpen = fileOperation { storeStamp() }
+    @Volatile private var openedStore: OpenedStore? = null
 
     fun bindOpenedStore(path: String?) {
-        openedMain = fileOperation {
+        openedStore = fileOperation {
             if (path != databaseFile.absolutePath) return@fileOperation null
-            identity(regularFile(databaseFile) ?: return@fileOperation null)
+            val main = identity(regularFile(databaseFile) ?: return@fileOperation null)
+            val afterOpen = storeStamp(main)
+            // SQLiteOpenHelper reapplies the main file's permissions on open.
+            // Carry forward an exact pre-open receipt only when that is the
+            // only possible stamp change and this exact opened stamp persists.
+            val before = beforeOpen?.takeIf {
+                afterOpen != null && it.main == main && it.contentFence == afterOpen.contentFence
+            }
+            OpenedStore(main, before?.fingerprint, afterOpen?.fingerprint)
         }
     }
 
@@ -49,23 +59,28 @@ internal class OrdinaryLocalStoreQualification(
      */
     suspend fun fingerprint(): String? {
         currentCoroutineContext().ensureActive()
-        return fileOperation {
-            val expectedMain = openedMain ?: return@fileOperation null
-            val mainBefore = regularFile(databaseFile) ?: return@fileOperation null
-            if (identity(mainBefore) != expectedMain || mainBefore.st_size == 0L ||
-                lstatOrNull(rollbackJournal) != null) return@fileOperation null
-            // Reject an unexpected file type, but allow SQLite to change read
-            // marks or reconstruct this non-durable index.
-            regularFile(shm)
-            val walBefore = regularFile(wal)?.takeUnless { it.st_size == 0L }
-            val mainStamp = fileStamp(databaseFile, mainBefore, SQLITE_HEADER_BYTES)
-            val walStamp = walBefore?.let { fileStamp(wal, it, WAL_HEADER_BYTES) }
-            val mainAfter = regularFile(databaseFile)
-            val walAfter = regularFile(wal)?.takeUnless { it.st_size == 0L }
-            if (!sameFile(mainBefore, mainAfter) || !sameFile(walBefore, walAfter) ||
-                lstatOrNull(rollbackJournal) != null) return@fileOperation null
-            task126OwnerHash("$mainStamp:${walStamp.orEmpty()}")
+        val opened = openedStore ?: return null
+        return fileOperation { storeStamp(opened.main)?.fingerprint }
+    }
+
+    private fun storeStamp(expectedMain: FileIdentity? = null): StoreStamp? {
+        val mainBefore = regularFile(databaseFile) ?: return null
+        val main = identity(mainBefore)
+        if ((expectedMain != null && main != expectedMain) || mainBefore.st_size == 0L ||
+            lstatOrNull(rollbackJournal) != null) return null
+        // SQLite may change read marks or reconstruct its non-durable index.
+        regularFile(shm)
+        val walBefore = regularFile(wal)?.takeUnless { it.st_size == 0L }
+        val mainStamp = fileStamp(databaseFile, mainBefore, SQLITE_HEADER_BYTES)
+        val walStamp = walBefore?.let {
+            fileStamp(wal, it, WAL_HEADER_BYTES) + ":" + changeTime(it)
         }
+        val mainAfter = regularFile(databaseFile)
+        val walAfter = regularFile(wal)?.takeUnless { it.st_size == 0L }
+        if (!sameFile(mainBefore, mainAfter) || !sameFile(walBefore, walAfter) ||
+            lstatOrNull(rollbackJournal) != null) return null
+        val contentFence = task126OwnerHash("$mainStamp:${walStamp.orEmpty()}")
+        return StoreStamp(main, contentFence, task126OwnerHash("$contentFence:${changeTime(mainBefore)}"))
     }
 
     fun matches(scopeKey: String, fingerprint: String): Boolean = fileOperation {
@@ -75,14 +90,17 @@ internal class OrdinaryLocalStoreQualification(
         readFile(witness, stat, ByteArray(stat.st_size.toInt())) { buffer, count ->
             bytes.write(buffer, 0, count)
         }
-        DataInputStream(ByteArrayInputStream(bytes.toByteArray())).use { input ->
-            input.readInt() == VERSION &&
-                input.readUTF() == scopeKey &&
-                input.readUTF() == fingerprint &&
-                input.readUTF() == checksum(scopeKey, fingerprint) &&
-                input.read() == -1 &&
-                sameFile(stat, regularFile(witness))
+        val savedFingerprint = DataInputStream(ByteArrayInputStream(bytes.toByteArray())).use { input ->
+            if (input.readInt() != VERSION || input.readUTF() != scopeKey) return@fileOperation false
+            val saved = input.readUTF()
+            if (input.readUTF() != checksum(scopeKey, saved) || input.read() != -1 ||
+                !sameFile(stat, regularFile(witness))) return@fileOperation false
+            saved
         }
+        if (savedFingerprint == fingerprint) return@fileOperation true
+        val opened = openedStore
+        opened != null && opened.before == savedFingerprint && opened.after == fingerprint &&
+            record(scopeKey, fingerprint)
     } == true
 
     fun record(scopeKey: String, fingerprint: String): Boolean = fileOperation {
@@ -123,9 +141,11 @@ internal class OrdinaryLocalStoreQualification(
             }
         }
         return listOf(stat.st_dev, stat.st_ino, stat.st_mode, stat.st_nlink, stat.st_size,
-            stat.st_mtim.tv_sec, stat.st_mtim.tv_nsec, stat.st_ctim.tv_sec, stat.st_ctim.tv_nsec,
+            stat.st_mtim.tv_sec, stat.st_mtim.tv_nsec,
             header.joinToString("") { "%02x".format(it) }).joinToString(":")
     }
+
+    private fun changeTime(stat: StructStat): String = "${stat.st_ctim.tv_sec}:${stat.st_ctim.tv_nsec}"
 
     private fun readFile(file: File, stat: StructStat, buffer: ByteArray,
         consume: (ByteArray, Int) -> Unit
@@ -207,7 +227,7 @@ internal class OrdinaryLocalStoreQualification(
     }
 
     private companion object {
-        const val VERSION = 2
+        const val VERSION = 3
         const val MAX_WITNESS_BYTES = 256L
         const val SQLITE_HEADER_BYTES = 100
         const val WAL_HEADER_BYTES = 32
