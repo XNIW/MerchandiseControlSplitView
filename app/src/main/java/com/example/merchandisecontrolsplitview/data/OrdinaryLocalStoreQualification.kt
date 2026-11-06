@@ -12,14 +12,14 @@ import java.io.File
 import java.io.FileDescriptor
 import java.io.FileOutputStream
 import java.io.IOException
-import java.security.MessageDigest
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
 /**
  * A local body proof for an unchanged Room store. Only the original validator may
  * mint it. The proof never authorizes an account, selects a shop or moves a cursor.
- * Any write that changes the durable database bytes makes the proof ineligible.
+ * A change to the SQLite file identity or write stamp makes the proof
+ * ineligible. Header reads are bounded independently of the store size.
  */
 internal class OrdinaryLocalStoreQualification(
     private val databaseFile: File,
@@ -32,7 +32,7 @@ internal class OrdinaryLocalStoreQualification(
     private val wal = File(databaseFile.path + "-wal")
     private val shm = File(databaseFile.path + "-shm")
     private val rollbackJournal = File(databaseFile.path + "-journal")
-    private val witness = File(witnessDirectory, "${databaseFile.name}.ordinary-local-store-v1")
+    private val witness = File(witnessDirectory, "${databaseFile.name}.ordinary-local-store-v$VERSION")
 
     fun bindOpenedStore(path: String?) {
         openedMain = fileOperation {
@@ -48,7 +48,7 @@ internal class OrdinaryLocalStoreQualification(
      * Treat a newly created zero-length WAL exactly like an absent WAL.
      */
     suspend fun fingerprint(): String? {
-        val work = currentCoroutineContext()
+        currentCoroutineContext().ensureActive()
         return fileOperation {
             val expectedMain = openedMain ?: return@fileOperation null
             val mainBefore = regularFile(databaseFile) ?: return@fileOperation null
@@ -58,16 +58,13 @@ internal class OrdinaryLocalStoreQualification(
             // marks or reconstruct this non-durable index.
             regularFile(shm)
             val walBefore = regularFile(wal)?.takeUnless { it.st_size == 0L }
-            val mainHash = hashFile(databaseFile, mainBefore) { work.ensureActive() }
-            val walHash = walBefore?.let { hashFile(wal, it) { work.ensureActive() } }
+            val mainStamp = fileStamp(databaseFile, mainBefore, SQLITE_HEADER_BYTES)
+            val walStamp = walBefore?.let { fileStamp(wal, it, WAL_HEADER_BYTES) }
             val mainAfter = regularFile(databaseFile)
             val walAfter = regularFile(wal)?.takeUnless { it.st_size == 0L }
             if (!sameFile(mainBefore, mainAfter) || !sameFile(walBefore, walAfter) ||
                 lstatOrNull(rollbackJournal) != null) return@fileOperation null
-            task126OwnerHash(
-                "${expectedMain.device}:${expectedMain.inode}:${mainBefore.st_size}:$mainHash:" +
-                    "${walBefore?.st_size ?: 0L}:${walHash.orEmpty()}"
-            )
+            task126OwnerHash("$mainStamp:${walStamp.orEmpty()}")
         }
     }
 
@@ -112,13 +109,22 @@ internal class OrdinaryLocalStoreQualification(
         }
     } == true
 
-    private fun hashFile(file: File, stat: StructStat, checkCancellation: () -> Unit): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        readFile(file, stat, ByteArray(256 * 1024)) { buffer, count ->
-            checkCancellation()
-            digest.update(buffer, 0, count)
+    private fun fileStamp(file: File, stat: StructStat, headerBytes: Int): String {
+        if (stat.st_size < headerBytes) throw IOException("qualification_file_truncated")
+        val header = withRegularFile(file, stat) { fd ->
+            ByteArray(headerBytes).also { bytes ->
+                var offset = 0
+                while (offset < bytes.size) {
+                    val count = Os.read(fd, bytes, offset, bytes.size - offset)
+                    if (count <= 0) throw IOException("qualification_file_changed")
+                    offset += count
+                }
+                if (!sameFile(stat, Os.fstat(fd))) throw IOException("qualification_file_changed")
+            }
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        return listOf(stat.st_dev, stat.st_ino, stat.st_mode, stat.st_nlink, stat.st_size,
+            stat.st_mtim.tv_sec, stat.st_mtim.tv_nsec, stat.st_ctim.tv_sec, stat.st_ctim.tv_nsec,
+            header.joinToString("") { "%02x".format(it) }).joinToString(":")
     }
 
     private fun readFile(file: File, stat: StructStat, buffer: ByteArray,
@@ -201,7 +207,9 @@ internal class OrdinaryLocalStoreQualification(
     }
 
     private companion object {
-        const val VERSION = 1
+        const val VERSION = 2
         const val MAX_WITNESS_BYTES = 256L
+        const val SQLITE_HEADER_BYTES = 100
+        const val WAL_HEADER_BYTES = 32
     }
 }
