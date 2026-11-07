@@ -1,6 +1,8 @@
 package com.example.merchandisecontrolsplitview.data
 
 import android.content.Context
+import com.example.merchandisecontrolsplitview.MerchandiseControlApplication
+import com.example.merchandisecontrolsplitview.LocalStoreAvailability
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import androidx.work.Data
@@ -61,8 +63,12 @@ class PriceBackfillWorker(
     private val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
     override suspend fun doWork(): Result {
-        // ✳️ QUI: usa AppDatabase.getDatabase(..), non "getInstance"
-        val db = AppDatabase.getDatabase(applicationContext)
+        // Persisted work can run before MainActivity. It joins the existing owner only after open.
+        val app = applicationContext as? MerchandiseControlApplication ?: return Result.retry()
+        if (app.localStoreAvailability.value !is LocalStoreAvailability.Ready) return Result.retry()
+        return try {
+          app.catalogSyncStateTracker.withLocalBusinessDataScopeFlight {
+        val db = app.database
         val productDao = db.productDao()
         val priceDao = db.productPriceDao()
         val productRemoteRefDao = db.productRemoteRefDao()
@@ -85,10 +91,12 @@ class PriceBackfillWorker(
         )
         val backfilledProductCount = priceDao.insertBackfillIfStillEligible(plan.points)
 
-        return Result.success(
+        Result.success(
             Data.Builder()
                 .putInt("backfilled_products", backfilledProductCount)
                 .build()
         )
+          }
+        } catch (_: Task126BusinessDataScopeChangedException) { Result.retry() }
     }
 }

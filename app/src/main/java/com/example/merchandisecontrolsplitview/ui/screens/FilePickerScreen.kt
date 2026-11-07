@@ -64,6 +64,18 @@ fun FilePickerScreen(
     onFilesPicked: (List<Uri>) -> Unit,
     onManualAdd: () -> Unit
 ) {
+    FilePickerDraftScreen(contentPadding, shopContext, true, onShopSelected, onFilesPicked, onManualAdd)
+}
+
+@Composable
+internal fun FilePickerDraftScreen(
+    contentPadding: PaddingValues = PaddingValues(),
+    shopContext: ShopContext = ShopContext.legacy(),
+    manualEntryEnabled: Boolean,
+    onShopSelected: (String) -> Unit = {},
+    onFilesPicked: (List<Uri>) -> Unit,
+    onManualAdd: () -> Unit
+) {
     val spacing = MaterialTheme.appSpacing
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -162,6 +174,7 @@ fun FilePickerScreen(
 
                 FilledTonalButton(
                     onClick = onManualAdd,
+                    enabled = manualEntryEnabled,
                     modifier = Modifier.fillMaxWidth(),
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 14.dp)
                 ) {

@@ -179,18 +179,23 @@ class MainActivity : ComponentActivity() {
             AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
         }
 
-        // Avvia il backfill idempotente
-        WorkManager.getInstance(applicationContext).enqueueUniqueWork(
-            "price-backfill-v1",                 // cambia il suffisso v* se in futuro modifichi la logica
-            ExistingWorkPolicy.KEEP,             // non enqueua se c'è già una run pendente
-            OneTimeWorkRequestBuilder<PriceBackfillWorker>().build()
-        )
         if (!localThreadSnapshot) {
             handleShareIntent(intent)
             runTask087SandboxSmokeIfRequested(intent)
         }
         setContent {
             val context = LocalContext.current
+            // The Activity never starts a DB worker while the Application owns opening/migration.
+            val app = application as MerchandiseControlApplication
+            val storeAvailability by app.localStoreAvailability.collectAsState()
+            LaunchedEffect(storeAvailability) {
+                if (storeAvailability is LocalStoreAvailability.Ready) {
+                    WorkManager.getInstance(applicationContext).enqueueUniqueWork(
+                        "price-backfill-v1", ExistingWorkPolicy.KEEP,
+                        OneTimeWorkRequestBuilder<PriceBackfillWorker>().build()
+                    )
+                }
+            }
             val prefs = context.getSharedPreferences("settings", MODE_PRIVATE)
 
             // 🔁 default "light" (non più "auto")

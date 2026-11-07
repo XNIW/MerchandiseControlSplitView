@@ -7,6 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import java.io.File
 
 // 1. Aggiungi Category::class alla lista delle entità.
 // 2. Incrementa la versione a 4.
@@ -40,6 +41,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 abstract class AppDatabase : RoomDatabase() {
     // Process-local priority only; never grants scope access or caches a receipt.
     internal val ordinaryNoWorkReceiptPriority = OrdinaryNoWorkReceiptPriority()
+
+    // Staging and in-memory databases never share the ordinary store witness.
+    internal var ordinaryLocalQualification: OrdinaryLocalStoreQualification? = null
 
     abstract fun productDao(): ProductDao
     abstract fun supplierDao(): SupplierDao
@@ -552,15 +556,23 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun getDatabase(context: Context): AppDatabase =
             INSTANCE ?: synchronized(this) {
-                INSTANCE ?: Room.databaseBuilder(
-                    context.applicationContext,
-                    AppDatabase::class.java,
-                    "app_database"
-                )
-                    .addMigrations(*PRODUCTION_MIGRATIONS.toTypedArray())
-                    .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
-                    .build().also { INSTANCE = it }
+                INSTANCE ?: openOrdinaryDatabase(context.applicationContext).also { INSTANCE = it }
             }
+
+        internal fun openOrdinaryDatabase(context: Context, name: String = "app_database"): AppDatabase {
+            val qualification = OrdinaryLocalStoreQualification(
+                context.getDatabasePath(name), File(context.noBackupFilesDir, "qualification-witnesses")
+            )
+            return Room.databaseBuilder(context, AppDatabase::class.java, name)
+                .addMigrations(*PRODUCTION_MIGRATIONS.toTypedArray())
+                .setJournalMode(JournalMode.WRITE_AHEAD_LOGGING)
+                .addCallback(object : RoomDatabase.Callback() {
+                    override fun onOpen(db: SupportSQLiteDatabase) {
+                        qualification.bindOpenedStore(db.path)
+                    }
+                })
+                .build().also { it.ordinaryLocalQualification = qualification }
+        }
 
         private fun SupportSQLiteDatabase.hasTable(name: String): Boolean =
             query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '$name' LIMIT 1").use { cursor ->

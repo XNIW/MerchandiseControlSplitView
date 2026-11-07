@@ -30,7 +30,11 @@ class StorefrontProductPagingSource(
                 return LoadResult.Error(IllegalStateException(response.code))
             }
             val remoteIds = response.rows.map(StorefrontPublicationListSummary::sourceProductId)
-            val localRows = repository.getProductsWithDetailsByRemoteIds(remoteIds)
+            val localRows = if (repository is DefaultInventoryRepository) {
+                repository.getCurrentDetailsByRemoteIds(remoteIds)
+            } else {
+                repository.getProductsWithDetailsByRemoteIds(remoteIds)
+            }
             LoadResult.Page(
                 data = localRows,
                 prevKey = page.takeIf { it > 1 }?.minus(1),

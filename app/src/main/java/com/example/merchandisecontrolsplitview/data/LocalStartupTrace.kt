@@ -229,10 +229,11 @@ internal class LocalStartupTrace(
         private const val MAX_NONTERMINAL_LINES = 63
         private val EVENT_STAGES = setOf(
             "mutex_requested", "mutex_acquired", "scope_resolved", "scope_published", "scope_discarded", "scope_unavailable",
-            "app_on_create", "room_checking", "room_ready", "room_unavailable", "offline_scope", "cloud_align", "proof_joined")
+            "app_on_create", "room_checking", "room_ready", "room_unavailable", "offline_scope", "cloud_align", "proof_joined",
+            "durable_qualification_hit", "durable_qualification_miss", "durable_qualification_minted")
         private val SPAN_STAGES = setOf(
             "resolve", "persisted_device", "transaction_wait", "binding", "counts", "journal", "quick_check",
-            "foreign_key", "baseline", "watermark", "receipt", "physical",
+            "foreign_key", "baseline", "watermark", "receipt", "physical", "durable_qualification_fingerprint",
             "auth_restore_dispatch", "room_open", "business_consumers_init")
         private val ACCESS_REASONS = setOf("local_read_write", "local_read_only", "local_access_unavailable")
         private val REASONS = setOf(

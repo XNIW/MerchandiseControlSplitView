@@ -975,6 +975,119 @@ class SupabaseAuthManagerTest {
         managerScope.cancel()
     }
 
+    @Test
+    fun `current identity refresh awaits the existing owner and rejects stale or withdrawn ingress`() = runTest {
+        val controller = FakeSupabaseAuthSessionController(authenticatedStatus(), StoredSessionRefreshResult.Refreshed)
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        val release = CompletableDeferred<StoredSessionRefreshResult>()
+        try {
+            manager.restoreSession(); runCurrent()
+            val identity = requireNotNull(manager.localIdentity.value)
+            controller.refreshHandler = { release.await() }
+            var result: Boolean? = null
+            launch { result = manager.refreshSessionForCurrentIdentity(identity) { true } }
+            runCurrent()
+            assertEquals(2, controller.refreshCalls)
+            assertEquals(null, result)
+            release.complete(StoredSessionRefreshResult.Refreshed); runCurrent()
+            assertEquals(true, result)
+            assertEquals(identity, manager.localIdentity.value)
+            assertTrue(manager.state.value is AuthState.SignedIn)
+            assertEquals(0, controller.clearCalls)
+            assertFalse(manager.refreshSessionForCurrentIdentity(identity.copy(authGeneration = identity.authGeneration + 1)) { true })
+            assertFalse(manager.refreshSessionForCurrentIdentity(identity.copy(userId = "foreign-owner")) { true })
+            assertFalse(manager.refreshSessionForCurrentIdentity(identity) { false })
+            assertEquals(2, controller.refreshCalls)
+        } finally { release.complete(StoredSessionRefreshResult.Refreshed); managerScope.cancel() }
+    }
+
+    @Test
+    fun `owner refresh cannot grant a shop scope withdrawn while the SDK is suspended`() = runTest {
+        val controller = FakeSupabaseAuthSessionController(authenticatedStatus(), StoredSessionRefreshResult.Refreshed)
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        val release = CompletableDeferred<StoredSessionRefreshResult>()
+        try {
+            manager.restoreSession(); runCurrent()
+            val identity = requireNotNull(manager.localIdentity.value)
+            var scopeCurrent = true
+            controller.refreshHandler = { release.await() }
+            var result: Boolean? = null
+            launch { result = manager.refreshSessionForCurrentIdentity(identity) { scopeCurrent } }
+            runCurrent(); scopeCurrent = false
+            release.complete(StoredSessionRefreshResult.Refreshed); runCurrent()
+            assertEquals(false, result)
+            assertEquals(identity, manager.localIdentity.value)
+            assertEquals(2, controller.refreshCalls)
+            assertEquals(0, controller.clearCalls)
+        } finally { release.complete(StoredSessionRefreshResult.Refreshed); managerScope.cancel() }
+    }
+
+    @Test
+    fun `logout fences a suspended owner refresh without resurrecting signed in identity`() = runTest {
+        val controller = FakeSupabaseAuthSessionController(authenticatedStatus(), StoredSessionRefreshResult.Refreshed)
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        val release = CompletableDeferred<StoredSessionRefreshResult>()
+        try {
+            manager.restoreSession(); runCurrent()
+            val identity = requireNotNull(manager.localIdentity.value)
+            controller.refreshHandler = { release.await() }
+            var result: Boolean? = null
+            launch { result = manager.refreshSessionForCurrentIdentity(identity) { true } }
+            runCurrent()
+            launch { manager.signOut() }; runCurrent()
+            assertFalse(manager.isCurrentLocalIdentity(identity))
+            release.complete(StoredSessionRefreshResult.Refreshed); runCurrent()
+            assertEquals(false, result)
+            assertEquals(null, manager.localIdentity.value)
+            assertEquals(AuthState.SignedOut, manager.state.value)
+            assertEquals(2, controller.refreshCalls)
+            assertEquals(SignOutScope.LOCAL, controller.lastSignOutScope)
+        } finally { release.complete(StoredSessionRefreshResult.Refreshed); managerScope.cancel() }
+    }
+
+    @Test
+    fun `preflight import waits for retired restore and cannot publish identity before ordinary validation`() = runTest {
+        val controller = FakeSupabaseAuthSessionController(authenticatedStatus(), StoredSessionRefreshResult.Refreshed)
+        val managerScope = CoroutineScope(StandardTestDispatcher(testScheduler) + SupervisorJob())
+        val manager = SupabaseAuthManager.createForTest(controller, managerScope)
+        val oldRefresh = CompletableDeferred<StoredSessionRefreshResult>()
+        val newUser = SupabaseSessionUser("00000000-0000-4000-8000-000000000146", null)
+        try {
+            controller.refreshHandler = { oldRefresh.await() }
+            manager.restoreSession(); runCurrent()
+            assertEquals(1, controller.refreshCalls)
+            controller.sessionStatus.value = SessionStatus.NotAuthenticated(isSignOut = true)
+            runCurrent()
+            assertEquals(AuthState.SignedOut, manager.state.value)
+            var imported = false
+            launch {
+                manager.withPreflightSessionImport {
+                    imported = true
+                    controller.sessionUser = newUser
+                    controller.refreshHandler = null
+                    controller.sessionStatus.value = authenticatedStatus()
+                }
+            }
+            runCurrent()
+            assertFalse("Old restore still owns the auth mutex", imported)
+            oldRefresh.complete(StoredSessionRefreshResult.Invalid("refresh_token_not_found")); runCurrent()
+            assertTrue(imported)
+            assertEquals(0, controller.clearCalls)
+            assertEquals(AuthState.SignedOut, manager.state.value) // SDK import itself grants no app authority.
+            assertEquals(null, manager.localIdentity.value)
+            manager.restoreSession(); runCurrent()
+            assertEquals(newUser.id, (manager.state.value as AuthState.SignedIn).userId)
+            assertEquals(newUser.id, manager.localIdentity.value?.userId)
+            assertEquals(2, controller.refreshCalls)
+            assertEquals(0, controller.clearCalls)
+            assertTrue(runCatching { manager.withPreflightSessionImport { error("must not replace SignedIn") } }
+                .exceptionOrNull() is IllegalStateException)
+        } finally { oldRefresh.complete(StoredSessionRefreshResult.Refreshed); managerScope.cancel() }
+    }
+
     private fun stubContext(): Context = mockk {
         every { getString(any()) } returns "safe localized auth error"
     }

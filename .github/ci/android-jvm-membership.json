@@ -314,6 +314,26 @@
           "name": "waitingPersistedIdentityPublishesOnlyMatchingStructurallyQualifiedLocalStore"
         },
         {
+          "classname": "com.example.merchandisecontrolsplitview.ApplicationSdkLifecycleOwnershipTest",
+          "name": "ownedApplicationBootstrapUsesRealSdkMainLifecycleAndDrainsAllOwnedScopes"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.BootstrapOpenOwnershipTest",
+          "name": "explicitConcurrentRetrySharesOneAttemptAndDoesNotStartAutomaticRetryLoop"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.BootstrapOpenOwnershipTest",
+          "name": "failedOpenPublishesOnlySafeCodeAndKeepsLifecycleAndSignOutAwayFromBusinessGetters"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.BootstrapOpenOwnershipTest",
+          "name": "staleNonCancellableFailureAfterTerminationCannotReplaceLastShellState"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.BootstrapOpenOwnershipTest",
+          "name": "staleNonCancellableSuccessAfterTerminationCannotConstructConsumersOrPublishReady"
+        },
+        {
           "classname": "com.example.merchandisecontrolsplitview.CheckpointReadinessSnapshotTest",
           "name": "coldSnapshotDoesNotReadOrInitializeAnything"
         },
@@ -600,6 +620,14 @@
         {
           "classname": "com.example.merchandisecontrolsplitview.data.AutomaticRecoveryRetryMetadataTest",
           "name": "orphanQualificationPreservesClaimAndBudgetAndNeedsDurableDueAndOrigin"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.BootstrapPersistedWorkerGateTest",
+          "name": "persistedWorkerCannotReachDatabaseOrScopeWhilePhysicalOpenIsHeldOrFailed"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.BootstrapPersistedWorkerGateTest",
+          "name": "persistedWorkerKeepsExistingWriterFlightAndCannotWriteWithReadOnlyCapability"
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.data.BusinessResolutionLedgerTest",
@@ -3559,6 +3587,10 @@
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest",
+          "name": "cloudConfirmationUsesActivatedBaselineWithReadOnlyAuthority"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest",
           "name": "componentBatchCopy59SmallHistoriesAndOversizeRowWithExplicitLargerWireLimitPreservesReopen"
         },
         {
@@ -4259,6 +4291,14 @@
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest",
+          "name": "scopedCatalogSearchVerifiesCurrentRelationsWithoutQualifyingHistoryOrPrices"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest",
+          "name": "scopedHistoryReadsCommittedBodiesWithoutQualifyingUnrelatedPrices"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.ShopSyncRecoveryCoordinatorTest",
           "name": "server denial stops retry window without activation and later trigger can recover"
         },
         {
@@ -4356,6 +4396,14 @@
         {
           "classname": "com.example.merchandisecontrolsplitview.data.StorefrontPendingMutationStoreTest",
           "name": "write failure is propagated and corrupt read fails closed"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.StorefrontProductPagingProjectionTest",
+          "name": "catalog rows use current price and relations while previous price loads per product"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.StorefrontProductPagingProjectionTest",
+          "name": "cloud confirmation reattaches after same scope cutover and rejects another owner"
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.data.StorefrontProductPagingProjectionTest",
@@ -4519,6 +4567,10 @@
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+          "name": "current identity refresh awaits the existing owner and rejects stale or withdrawn ingress"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
           "name": "definitively rejected session cannot recover from a late authenticated event"
         },
         {
@@ -4547,11 +4599,23 @@
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+          "name": "logout fences a suspended owner refresh without resurrecting signed in identity"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
           "name": "logout request fences invalid bootstrap result while validation holds auth mutex"
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
           "name": "only canonical revocation codes invalidate a stored session"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+          "name": "owner refresh cannot grant a shop scope withdrawn while the SDK is suspended"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+          "name": "preflight import waits for retired restore and cannot publish identity before ordinary validation"
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
@@ -5003,6 +5067,10 @@
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuardTest",
+          "name": "local read survives write withdrawal and never grants a nested writer"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.Task126BusinessDataScopeRuntimeGuardTest",
           "name": "recovery publication rejects permission and scope ABA during repository qualification"
         },
         {
@@ -5204,6 +5272,254 @@
         {
           "classname": "com.example.merchandisecontrolsplitview.data.WeChatAuthContractTest",
           "name": "state and nonce are independent cryptographically sized values"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "authorizedSummaryAndFirstPageDecodeTogetherWithoutRecalculatingLedgerNet"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "canonicalMoneyRejectsOverflowExponentFractionsWhitespaceAndNegativeZero"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "cursorRetainsRawMicrosecondsAndCompositeIdInRequest"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "deniedResponseWithFinancialBodyCannotQualifyAsEmptySuccess"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "detailDecimalQuantityAndAllAmountsArePreserved"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "exactClpPreservesValuesAcrossBinaryFloatBoundary"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "fiscalStatusIsNotUsedAsSaleStatus"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "fractionalQuantityAndItsDecimalScaleArePreserved"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "malformedPageCannotYieldOtherwiseValidSummary"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "missingSalesReadOrWrongPrincipalKindCannotExposeData"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "nullFinancialDetailFieldsAndUnknownLineTypesAreRejected"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "numericJsonAmountIsRejectedEvenWhenSmallEnoughForDouble"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "pageWithSameInstantUsesUuidAsTheSecondCursorComponent"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "repeatedOrNonAdvancingCompositeCursorIsRejected"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "signedInt64LimitsRoundTripExactly"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "timestampFinerThanServerMicrosecondsIsRejectedInsteadOfTruncated"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "unsupportedCurrencyNeverRelabelsAClpAmount"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "viewerFilterOptionsCannotExposeOperationalIdentities"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "viewerMetadataLeakIsRejected"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "wellFormedDenialProducesNoFinancialDto"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadCodecTest",
+          "name": "wrongPrincipalShopAndKnownDeviceAreRejectedBeforePublication"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadTransportTest",
+          "name": "awaitingCancelledResultCannotReleasePhysicalCall"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadTransportTest",
+          "name": "cancellingTheCallDoesNotInventATerminalReceipt"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadTransportTest",
+          "name": "networkTerminalBeforeCallbackStillRetainsOwnership"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadTransportTest",
+          "name": "singleRpcUsesCapturedBearerAndPublicKeyAndNoRedirectOrRetry"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosReadTransportTest",
+          "name": "staleAuthorityAfterCredentialCaptureNeverEnqueues"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "authGenerationSwitchFencesTheLatePriorResponse"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "cacheEvictsAtFiveKeysAndAtFiveHundredSales"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "cacheRejectsAVisibleSetBeyondFiveMiBWithoutDroppingItsExistingCopy"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "callbackAfterScopePredicateRevocationCannotPublish"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "deepPageDeduplicatesIdsAndAdvancesOnlyTheMatchingCursor"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "detailIsReadOnEachOpenAndReleasedOnClose"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "emptyRequiresAnAuthorizedEnvelope"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "explicitRefreshRestoresAnchorIfItExistsInTheNewBoundedChain"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "failedDeepHistoryRefreshCanRetryFromTheFirstEnvelopeWithoutLosingTheVisibleAnchor"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "filterChangeDiscardsLateOldPageAndItsCursor"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "first401KeepsReadOwnershipUntilOwnerRefreshCompletesAndSecond401StopsPolling"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "firstExplicitHistoryRefreshRebuildsTheDeepAnchorWithoutPublishingAnIntermediatePage"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "firstHistoryRefreshFailureRetainsTheVisibleCopyAndLateScopeResponseCannotReplaceIt"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "healthyDetailRefreshRetainsItsIdentityAndVisibleCopyUntilTheAuthorizedResponse"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "historyAndDetailsAreNotPolledEveryTwoSeconds"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "lateSuccessBeforeTerminalCannotExtendTheOverviewDeadline"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "nativeMoneyFormattingPreservesIntegersAboveTwoToTheFiftyThird"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "nativeQuantityFormattingDoesNotTruncateFractionalPrecision"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "offlinePurgesFinancialDataMetadataSelectionAndDoesNotRenewFetchedTime"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "overviewPublishesAuthoritativeSummaryAndFirstPageAtomically"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "pageAndFilter401RefreshRestartAnAuthorizedFirstEnvelopeWithoutTheRetiredCursor"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "passiveHistoryRefreshStagesDataWithoutChangingTheVisibleAnchor"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "pollingHasMinimumTwoSecondStartsAndNoCatchUpWhileLive"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "principalMismatchCannotPublishEvenAWellFormedFinancialDto"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "queued401RetryKeepsItsOnceFlagWhenTheOverviewTickMeetsTheTwoSecondCadence"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "queuedCancellationCannotSkipTheFinallyOwnedTerminalDrain"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "repeatedEnvironmentWithSameDeniedScopeDoesNotRestartTheReader"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "responseAtOnePointNineSecondsStillCancelsAtTwoIfTransportIsNotTerminal"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "retryAfterTakesPrecedenceOverTheShorterBackoff"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "scopeReplacementCancelsHeld401RefreshAndNeverRetriesThePriorAuthority"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "stableDenialPurgesAndStopsPolling"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "successful401RefreshRestoresOnlyTheRequestedDetailIdentityBeforeItsAuthorizedRead"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "timeoutDoesNotReleaseTheLaneUntilActualTransportTerminal"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "transientFailureKeepsOnlyPreviouslyAuthorizedCopyAndItsOriginalFetchedTime"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "unknownAuthorityExposesNoAmountsAndStartsNoTransport"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "viewerAuthorizationDoesNotEnableOperationalMetadataFilters"
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.productimage.ProductImageCacheTest",
@@ -6294,6 +6610,34 @@
           "name": "dumpShoppingHogarCurrentMapping"
         },
         {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.BootstrapDraftBridgeTest",
+          "name": "explicitHistorySelectionRetiresHeldRawParserBeforeItCanOverwriteBusinessSession"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.BootstrapDraftBridgeTest",
+          "name": "generatedOldPricesStayInGatedBusinessProjectionAcrossWithdrawalForeignKeyAndReturnToRaw"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.BootstrapDraftBridgeTest",
+          "name": "heldRealParserCompletesIntoSameDraftAfterBusinessVmAdoptsIt"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.BootstrapDraftBridgeTest",
+          "name": "sameDraftMappingAndPresentationInputsAreAdoptedWithoutResetByOpenedBusinessVm"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.BootstrapDraftBridgeTest",
+          "name": "storedHistoryRowsNeverEnterRawPreviewAfterSameKeyRetirementOrOwnerShopAuthChange"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.BootstrapReadWriteCapabilityTest",
+          "name": "readOnlySnapshotSubscribesToReadFlowButNeverExecutesExistingWriterCallback"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.BootstrapReadWriteCapabilityTest",
+          "name": "writerCallbackKeepsItsOriginalGenerationAndRequiresFreshWritableAdmission"
+        },
+        {
           "classname": "com.example.merchandisecontrolsplitview.viewmodel.CatalogSyncViewModelTest",
           "name": "021 fresh signed-in manual refresh bootstraps catalog and then reports synced"
         },
@@ -6894,6 +7238,38 @@
           "name": "visible thumbnail batch is cancelled after its last consumer leaves"
         },
         {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.ExcelImportDraftStateTest",
+          "name": "RAM viewmodel exposes one state without constructing production application"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.ExcelImportDraftStateTest",
+          "name": "append skips empty tables and preserves prior mapping and editable cells"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.ExcelImportDraftStateTest",
+          "name": "column defaults essential locks mapping and restore match existing semantics"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.ExcelImportDraftStateTest",
+          "name": "failed replacement preserves prior draft and maps first empty file message"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.ExcelImportDraftStateTest",
+          "name": "incompatible append publishes no partial rows"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.ExcelImportDraftStateTest",
+          "name": "new request retains loading authority when cancelled old parser finishes first"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.ExcelImportDraftStateTest",
+          "name": "reset rejects a held parser completion and clears only raw draft state"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.ExcelImportDraftStateTest",
+          "name": "stale read error cannot replace a newer successful draft"
+        },
+        {
           "classname": "com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModelTest",
           "name": "042 generated local save does not reload full sheet from self observer emission"
         },
@@ -6972,6 +7348,10 @@
         {
           "classname": "com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModelTest",
           "name": "getPreGenerateDataQualitySummary keeps duplicate feedback compact and counts missing purchase prices"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModelTest",
+          "name": "history selection ignores a different session and retires a removed selected session"
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.viewmodel.ExcelViewModelTest",
@@ -7252,14 +7632,10 @@
         {
           "classname": "com.example.merchandisecontrolsplitview.viewmodel.StorefrontDatabaseViewModelTest",
           "name": "visible summaries continue beyond one hundred without duplicate reload"
-        },
-        {
-          "classname": "com.example.merchandisecontrolsplitview.ApplicationSdkLifecycleOwnershipTest",
-          "name": "ownedApplicationBootstrapUsesRealSdkMainLifecycleAndDrainsAllOwnedScopes"
         }
       ],
-      "total": 1751,
-      "class_count": 103,
+      "total": 1845,
+      "class_count": 111,
       "allowed_skips": [
         {
           "classname": "com.example.merchandisecontrolsplitview.data.DefaultInventoryRepositoryTest",

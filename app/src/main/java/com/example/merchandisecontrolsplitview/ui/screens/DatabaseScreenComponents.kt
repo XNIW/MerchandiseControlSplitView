@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -66,6 +67,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -103,6 +105,9 @@ import com.example.merchandisecontrolsplitview.data.CatalogEntityKind
 import com.example.merchandisecontrolsplitview.data.CatalogListItem
 import com.example.merchandisecontrolsplitview.data.Product
 import com.example.merchandisecontrolsplitview.data.ProductWithDetails
+import com.example.merchandisecontrolsplitview.data.QualifiedCatalogPage
+import com.example.merchandisecontrolsplitview.data.QualifiedCatalogRequest
+import com.example.merchandisecontrolsplitview.data.ProductPriceSummary
 import com.example.merchandisecontrolsplitview.productimage.ProductImageVariant
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
 import com.example.merchandisecontrolsplitview.util.formatClPricePlainDisplay
@@ -116,6 +121,7 @@ import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiKey
 import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiState
 import com.example.merchandisecontrolsplitview.viewmodel.ProductImageUiStatus
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import androidx.compose.animation.Crossfade
 
@@ -518,6 +524,7 @@ internal fun DatabaseProductListSection(
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
     productDetailsOverrides: Map<Long, ProductWithDetails> = emptyMap(),
+    observePriceSummary: ((Long) -> Flow<ProductPriceSummary?>)? = null,
     productImageStates: Map<ProductImageUiKey, ProductImageUiState> = emptyMap(),
     onProductImageVisibilityChanged: (Product, Boolean) -> Unit = { _, _ -> },
     storefrontSummaries: Map<Long, StorefrontPublicationSummary> = emptyMap(),
@@ -692,8 +699,19 @@ internal fun DatabaseProductListSection(
                             enableDismissFromEndToStart = true,
                             backgroundContent = { DismissBackground(dismissState) },
                             content = {
+                                val priceSummary = observePriceSummary?.let { observe ->
+                                    val summaries = remember(currentProduct.id, observe) {
+                                        observe(currentProduct.id)
+                                    }
+                                    summaries.collectAsState(initial = null).value
+                                }
+                                val rowDetails = if (priceSummary == null) effectiveDetails
+                                    else effectiveDetails.copy(
+                                        prevPurchase = priceSummary.prevPurchase,
+                                        prevRetail = priceSummary.prevRetail
+                                    )
                                 ProductRow(
-                                    productDetails = effectiveDetails,
+                                    productDetails = rowDetails,
                                     imageState = productImageStates[
                                         ProductImageUiKey(
                                             currentProduct.id,
@@ -881,6 +899,45 @@ private fun CatalogEntityKind.searchHintRes(): Int = when (this) {
 
 
 @Composable
+internal fun QualifiedCatalogReadScreen(
+    contentPadding: PaddingValues,
+    page: QualifiedCatalogPage,
+    request: QualifiedCatalogRequest,
+    filter: String,
+    onFilter: (String) -> Unit,
+    onPage: (QualifiedCatalogRequest) -> Unit
+) {
+    Column(Modifier.fillMaxSize().padding(contentPadding).padding(horizontal = 20.dp)) {
+        DatabaseSearchField(filter, stringResource(R.string.database_products_search_hint),
+            onValueChange = onFilter, onClear = { onFilter("") })
+        if (page.request != request) {
+            CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
+        } else {
+            LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("database-product-list"),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (page.products.isEmpty()) item {
+                    Text(if (filter.isBlank()) stringResource(R.string.no_products_in_db)
+                        else stringResource(R.string.no_results_for, filter))
+                }
+                items(page.products, key = { it.product.id }) { row ->
+                    ProductRow(productDetails = row, onClick = {}, readOnly = true)
+                }
+            }
+            if (request.page > 0 || page.hasMore) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    TextButton(enabled = request.page > 0, onClick = { onPage(request.copy(page = request.page - 1)) }) {
+                        Text(stringResource(R.string.compare_previous))
+                    }
+                    TextButton(enabled = page.hasMore, onClick = { onPage(request.copy(page = request.page + 1)) }) {
+                        Text(stringResource(R.string.next))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 internal fun ProductRow(
     productDetails: ProductWithDetails,
     imageState: ProductImageUiState? = null,
@@ -888,7 +945,8 @@ internal fun ProductRow(
     onImageClick: () -> Unit = {},
     storefrontSummary: StorefrontPublicationSummary? = null,
     onClick: () -> Unit,
-    onShowHistory: () -> Unit = {}
+    onShowHistory: () -> Unit = {},
+    readOnly: Boolean = false
 ) {
     val product = productDetails.product
     DisposableEffect(product.id, product.primaryImageVersionId) {
@@ -898,7 +956,7 @@ internal fun ProductRow(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .then(if (readOnly) Modifier else Modifier.clickable(onClick = onClick)),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
@@ -908,7 +966,7 @@ internal fun ProductRow(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            ProductImagePreview(
+            if (!readOnly) ProductImagePreview(
                 state = imageState,
                 contentDescription = stringResource(R.string.product_image_thumbnail),
                 modifier = Modifier
@@ -1017,7 +1075,7 @@ internal fun ProductRow(
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    Row(
+                    if (!readOnly) Row(
                         modifier = Modifier
                             .padding(top = 2.dp)
                             .clickable(onClick = onShowHistory),

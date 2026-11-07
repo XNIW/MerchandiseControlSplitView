@@ -180,6 +180,33 @@ class Task126BusinessDataScopeRuntimeGuardTest {
     }
 
     @Test
+    fun `local read survives write withdrawal and never grants a nested writer`() = runTest {
+        val scope = ownerScope(OWNER_A, SHOP_A)
+        val state = Task126BusinessDataScopeState.ready(scope)
+        val gate = Task126BusinessDataScopeFlightGate(state)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val reader = async {
+            gate.withLocalBusinessReadFlight {
+                entered.complete(Unit)
+                release.await()
+                assertTrue(runCatching { gate.withLocalBusinessDataScopeFlight { error("writer entered") } }
+                    .exceptionOrNull() is Task126BusinessDataScopeChangedException)
+                assertTrue(runCatching { gate.withCurrentBusinessDataScopeFlight { error("writer entered") } }
+                    .exceptionOrNull() is Task126BusinessDataScopeChangedException)
+                assertTrue(runCatching { gate.requireCurrentBusinessDataScope() }
+                    .exceptionOrNull() is Task126BusinessDataScopeChangedException)
+                "local row"
+            }
+        }
+        entered.await()
+        gate.updateState(state.copy(localWritesAllowed = false))
+        release.complete(Unit)
+        assertEquals("local row", reader.await())
+        assertEquals("read-only row", gate.withLocalBusinessReadFlight { "read-only row" })
+    }
+
+    @Test
     fun `143 local lease is invalidated by scope or permission change`() = runTest {
         for (next in listOf(
             Task126BusinessDataScopeState.ready(ownerScope(OWNER_B, SHOP_B)),

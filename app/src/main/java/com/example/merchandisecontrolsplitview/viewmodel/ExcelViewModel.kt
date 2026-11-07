@@ -22,15 +22,10 @@ import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import com.example.merchandisecontrolsplitview.util.parseUserNumericInput
 import com.example.merchandisecontrolsplitview.util.parseUserPriceInput
 import com.example.merchandisecontrolsplitview.util.parseUserQuantityInput
-import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcel
-import com.example.merchandisecontrolsplitview.util.readAndAnalyzeExcelDetailed
-import com.example.merchandisecontrolsplitview.util.classifyExcelFileUserError
-import com.example.merchandisecontrolsplitview.util.resolveExcelFileErrorMessage
-import com.example.merchandisecontrolsplitview.util.ExcelFileUserError
 import com.example.merchandisecontrolsplitview.data.DefaultInventoryRepository
 import com.example.merchandisecontrolsplitview.data.InventoryRepository
+import com.example.merchandisecontrolsplitview.data.Task126OwnerStoreScope
 import com.example.merchandisecontrolsplitview.ui.navigation.ImportNavOrigin
-import com.example.merchandisecontrolsplitview.util.canonicalExcelHeaderKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -82,8 +77,6 @@ data class PreGenerateDataQualitySummary(
         get() = duplicateBarcodeCount > 0 || missingPurchasePriceCount > 0
 }
 
-private const val PRE_GENERATE_DUPLICATE_SAMPLE_LIMIT = 2
-
 /**
  * ViewModel per gestione griglia Excel e cronologia persistente.
  */
@@ -93,42 +86,33 @@ class ExcelViewModel(
     private val repository: InventoryRepository
 ) : AndroidViewModel(application) {
     private val localReadGate = LocalBusinessReadGate(application)
-    private val essentialColumns = setOf("barcode", "productName", "purchasePrice")
-    private val defaultIncludedColumnKeys = setOf(
-        "barcode",
-        "productName",
-        "purchasePrice",
-        "quantity",
-        "retailPrice",
-        "totalPrice",
-        "secondProductName",
-        "itemNumber",
-        "supplier",
-        "rowNumber",
-        "discount",
-        "discountedPrice",
-        "category",
-        "realQuantity",
-        "oldPurchasePrice",
-        "oldRetailPrice"
-    )
+    // The shell owns the same RAM draft before and after physical opening.
+    private var draft = ExcelImportDraftState(viewModelScope)
+    // DB-derived History/old-price rows have a separate RAM projection. Only the
+    // existing gated business routes consume it; the shell's raw draft never does.
+    private val businessProjection = mutableStateOf<ExcelImportDraftState?>(null)
+    private val displayedGrid: ExcelImportDraftState get() = businessProjection.value ?: draft
+    internal val importDraftState: ExcelImportDraftState get() = draft
+    internal constructor(application: Application, repository: InventoryRepository, sharedDraft: ExcelImportDraftState)
+        : this(application, repository) { draft = sharedDraft }
+
     // Stato griglia
-    val excelData = mutableStateListOf<List<String>>()
-    val originalHeaders = mutableStateListOf<String>()
-    val selectedColumns = mutableStateListOf<Boolean>()
-    val editableValues = mutableStateListOf<MutableList<MutableState<String>>>()
-    val completeStates = mutableStateListOf<Boolean>()
-    val errorRowIndexes = mutableStateOf<Set<Int>>(emptySet())
+    val excelData get() = displayedGrid.excelData
+    val originalHeaders get() = displayedGrid.originalHeaders
+    val selectedColumns get() = displayedGrid.selectedColumns
+    val editableValues get() = displayedGrid.editableValues
+    val completeStates get() = displayedGrid.completeStates
+    val errorRowIndexes get() = displayedGrid.errorRowIndexes
 
     // Flag UI
     val generated = mutableStateOf(false)
-    val isLoading = mutableStateOf(false)
-    val loadError = mutableStateOf<String?>(null)
+    val isLoading get() = draft.isLoading
+    val loadError get() = draft.loadError
     val historyActionMessage = mutableStateOf<String?>(null)
     val currentEntryName = mutableStateOf("")
     val currentEntryFileName = mutableStateOf("")
 
-    val loadingProgress = mutableStateOf<Int?>(null)
+    val loadingProgress get() = draft.loadingProgress
 
     val isExporting = mutableStateOf(false)
     val exportProgress = mutableStateOf<Int?>(null)
@@ -158,21 +142,11 @@ class ExcelViewModel(
         }
     }
 
-    private suspend fun postProgress(p: Int?) = withContext(Dispatchers.Main) {
-        loadingProgress.value = p?.coerceIn(0, 100)
-    }
 
     fun consumeHistoryActionMessage() {
         historyActionMessage.value = null
     }
 
-    private fun fileLoadErrorMessage(
-        context: Context,
-        throwable: Throwable,
-        genericResId: Int
-    ): String {
-        return resolveExcelFileErrorMessage(context, throwable, genericResId)
-    }
 
     // Stato privato che mantiene il filtro data. Alimenta le query Room.
     private val _dateFilter = MutableStateFlow<DateFilter>(DateFilter.All)
@@ -271,7 +245,7 @@ class ExcelViewModel(
         )
 
     val currentEntryStatus = mutableStateOf(Triple(SyncStatus.NOT_ATTEMPTED, false, 0L))
-    val headerTypes = mutableStateListOf<String>()
+    val headerTypes get() = displayedGrid.headerTypes
 
     /** Argomenti ultima navigazione a Generated (044C). */
     private var generatedRouteIsNew: Boolean = false
@@ -304,51 +278,28 @@ class ExcelViewModel(
 
     private var _originalHistoryEntryState: HistoryEntry? = null
     private var _preGenerateStateBackup: List<List<String>>? = null
-    private var _preGenerateOriginalHeadersBackup: List<String>? = null
-    private var _preGenerateHeaderTypesBackup: List<String>? = null
     private var currentHistoryEntryObserverJob: Job? = null
     private val suppressedHistoryEntryObserverReloads = mutableMapOf<Long, Int>()
 
     val lastUsedCategory = mutableStateOf<String?>(null)
 
     // Funzione per verificare se una colonna è essenziale
-    fun isColumnEssential(colIdx: Int): Boolean {
-        val headerKey = excelData.getOrNull(0)?.getOrNull(colIdx)
-        return headerKey in essentialColumns
-    }
+    fun isColumnEssential(colIdx: Int): Boolean = displayedGrid.isColumnEssential(colIdx)
 
     // Funzione per gestire la selezione di una colonna, bloccando quelle essenziali
-    fun toggleColumnSelection(colIdx: Int) {
-        if (isColumnEssential(colIdx)) {
-            if (colIdx in selectedColumns.indices) {
-                selectedColumns[colIdx] = true
-            }
-            return
-        }
-        if (colIdx in selectedColumns.indices) {
-            selectedColumns[colIdx] = !selectedColumns[colIdx]
-        }
-    }
+    fun toggleColumnSelection(colIdx: Int) = displayedGrid.toggleColumnSelection(colIdx)
 
     // Funzione per gestire il "Seleziona/Deseleziona Tutto" in modo sicuro
-    fun toggleSelectAll() {
-        val anyUnselected = selectedColumns.indices.any { idx ->
-            !selectedColumns[idx] && !isColumnEssential(idx)
-        }
-        selectedColumns.indices.forEach { idx ->
-            if (isColumnEssential(idx)) {
-                selectedColumns[idx] = true
-            } else {
-                selectedColumns[idx] = anyUnselected
-            }
-        }
-    }
+    fun toggleSelectAll() = displayedGrid.toggleSelectAll()
 
     /**
      * Funzione helper PRIVATA che popola lo stato live del ViewModel.
      * Non tocca i backup.
      */
     private fun populateStateFromEntry(entry: HistoryEntry) {
+        // A stored session is business output, never raw file input.
+        draft.retirePendingFileRead()
+        businessProjection.value = ExcelImportDraftState(viewModelScope)
         excelData.clear()
         originalHeaders.clear()
         selectedColumns.clear()
@@ -386,20 +337,8 @@ class ExcelViewModel(
      * Ripristina lo stato della griglia a come era in PreGenerateScreen.
      */
     fun revertToPreGenerateState() {
-        _preGenerateStateBackup?.let { backupData ->
-            resetState()
-            excelData.addAll(backupData)
-            originalHeaders.addAll(
-                _preGenerateOriginalHeadersBackup
-                    ?: backupData.firstOrNull()?.toList().orEmpty()
-            )
-            headerTypes.addAll(
-                _preGenerateHeaderTypesBackup
-                    ?: List(backupData.firstOrNull()?.size ?: 0) { "unknown" }
-            )
-            initPreGenerateState()
-            generated.value = false
-        }
+        if (_preGenerateStateBackup != null) clearBusinessPresentation()
+        // The original raw object, mapping, typed inputs and editable values never changed.
     }
 
     fun clearOriginalState() {
@@ -416,13 +355,33 @@ class ExcelViewModel(
         _categoryFilter.value = filter.category
     }
 
+    internal fun observeQualifiedHistory(
+        key: LocalBusinessPresentationKey, scope: Task126OwnerStoreScope
+    ): Flow<List<HistoryEntry>?> {
+        val local = repository as? DefaultInventoryRepository ?: return flowOf(null)
+        return local.observeQualifiedHistory(scope).map { entries ->
+            entries?.takeIf { localReadGate.snapshot().key == key }
+        }
+    }
+
+    internal fun historyDateRange(filter: DateFilter): Pair<String, String>? =
+        (repository as? DefaultInventoryRepository)?.historyRangeFor(filter)
+
     fun loadHistoryEntry(entryUid: Long, onLoaded: (() -> Unit)? = null) {
+        val selection = localReadGate.snapshot()
+        if (entryUid <= 0L || (selection.state != null && selection.key == null)) return
         currentHistoryEntryObserverJob?.cancel()
         suppressedHistoryEntryObserverReloads.clear()
+        _originalHistoryEntryState = null
         currentHistoryEntryObserverJob = viewModelScope.launch {
             var firstLoadDelivered = false
-            localReadGate.observe<HistoryEntry?>(null) { repository.observeHistoryEntryByUid(entryUid) }.collect { entry ->
-                if (entry != null) {
+            localReadGate.observe<HistoryEntry?>(null) {
+                if (localReadGate.snapshot().key == selection.key) repository.observeHistoryEntryByUid(entryUid)
+                else flowOf(null)
+            }.collect { entry ->
+                val current = localReadGate.snapshot()
+                if (current.key != selection.key || !localReadGate.isCurrent(current)) return@collect
+                if (entry?.uid == entryUid) {
                     if (consumeSuppressedHistoryEntryObserverReload(entry.uid)) {
                         Log.i(
                             GENERATED_DB_TAG,
@@ -435,6 +394,8 @@ class ExcelViewModel(
                         firstLoadDelivered = true
                         onLoaded?.invoke()
                     }
+                } else if (entry == null && firstLoadDelivered && currentEntryStatus.value.third == entryUid) {
+                    clearBusinessPresentation()
                 }
             }
         }
@@ -483,180 +444,30 @@ class ExcelViewModel(
     }
 
     fun loadFromMultipleUris(context: Context, uris: List<Uri>) {
-        if (uris.isEmpty()) return
-        viewModelScope.launch {
-            isLoading.value = true
-            loadError.value = null
-            postProgress(5) // sta partendo
-
-            try {
-                val firstAnalysis = try {
-                    withContext(Dispatchers.IO) {
-                        readAndAnalyzeExcelDetailed(context, uris.first())
-                    }
-                } catch (e: Exception) {
-                    val isFirstFileEmpty =
-                        classifyExcelFileUserError(context, e) == ExcelFileUserError.EmptyOrInvalid
-                    if (isFirstFileEmpty) {
-                        throw IllegalArgumentException(
-                            context.getString(R.string.error_first_file_empty_or_invalid)
-                        )
-                    }
-                    throw e
-                }
-                val goldenHeader = firstAnalysis.header
-                val firstDataRows = firstAnalysis.dataRows
-                val headerSource = firstAnalysis.headerSource
-                postProgress(15)
-
-                val allValidRows = mutableListOf<List<String>>()
-                allValidRows.addAll(firstDataRows)
-
-                if (uris.size > 1) {
-                    val remaining = uris.size - 1
-                    uris.drop(1).forEachIndexed { idx, uri ->
-                        val (newHeader, newDataRows, _) = withContext(Dispatchers.IO) {
-                            readAndAnalyzeExcel(context, uri)
-                        }
-                        if (newHeader != goldenHeader) {
-                            throw IllegalArgumentException(context.getString(R.string.error_different_columns))
-                        }
-                        allValidRows.addAll(newDataRows)
-
-                        // 15 → 85 distribuiti sui file rimanenti
-                        val pct = 15 + ((idx + 1) * 70 / remaining)
-                        postProgress(pct)
-                    }
-                }
-
-                postProgress(95) // merge dati / setup stato
-                excelData.add(goldenHeader)
-                excelData.addAll(allValidRows)
-                originalHeaders.addAll(firstAnalysis.originalHeaders)
-                headerTypes.addAll(headerSource)
-                initPreGenerateState()
-            } catch (e: Exception) {
-                loadError.value = fileLoadErrorMessage(
-                    context,
-                    e,
-                    R.string.error_unknown_file_analysis
-                )
-            } finally {
-                isLoading.value = false
-                postProgress(null) // finito
-            }
-        }
+        businessProjection.value = null
+        draft.loadFromMultipleUris(context, uris)
     }
 
-    fun appendFromMultipleUris(context: Context, uris: List<Uri>) {
-        if (uris.isEmpty()) return
-        viewModelScope.launch {
-            isLoading.value = true
-            loadError.value = null
-            postProgress(5)
+    fun appendFromMultipleUris(context: Context, uris: List<Uri>) = draft.appendFromMultipleUris(context, uris)
 
-            try {
-                val originalHeader = excelData.firstOrNull()
-                if (originalHeader.isNullOrEmpty()) {
-                    loadError.value = context.getString(R.string.error_main_file_needed)
-                    return@launch
-                }
-                val allNewDataRows = mutableListOf<List<String>>()
 
-                withContext(Dispatchers.IO) {
-                    val total = uris.size.coerceAtLeast(1)
-                    for ((i, uri) in uris.withIndex()) {
-                        val (newHeader, newDataRows, _) = readAndAnalyzeExcel(
-                            context = context,
-                            uri = uri,
-                            allowEmptyTabularResult = true
-                        )
-                        if (newHeader.isEmpty() && newDataRows.isEmpty()) {
-                            val pct = 10 + ((i + 1) * 80 / total)
-                            postProgress(pct)
-                            continue
-                        }
-                        if (originalHeader != newHeader) {
-                            throw IllegalArgumentException(context.getString(R.string.error_incompatible_file_structure))
-                        }
-                        allNewDataRows.addAll(newDataRows)
+    private fun initPreGenerateState() = displayedGrid.initPreGenerateState()
 
-                        val pct = 10 + ((i + 1) * 80 / total) // 10 → 90
-                        postProgress(pct)
-                    }
-                }
+    fun defaultIsColumnIncluded(headerKey: String?, headerType: String?): Boolean =
+        draft.defaultIsColumnIncluded(headerKey, headerType)
 
-                if (allNewDataRows.isEmpty()) {
-                    loadError.value = context.getString(R.string.error_append_no_data_rows)
-                    return@launch
-                }
-
-                postProgress(95)
-                appendRowsToCurrentGrid(allNewDataRows)
-            } catch (e: Exception) {
-                loadError.value = fileLoadErrorMessage(
-                    context,
-                    e,
-                    R.string.error_adding_files
-                )
-            } finally {
-                isLoading.value = false
-                postProgress(null)
-            }
-        }
-    }
-
-    private fun appendRowsToCurrentGrid(newRows: List<List<String>>) {
-        if (newRows.isEmpty()) return
-        excelData.addAll(newRows)
-        repeat(newRows.size) {
-            editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf("")))
-            completeStates.add(false)
-        }
-    }
-
-    private fun initPreGenerateState() {
-        selectedColumns.clear()
-        excelData.firstOrNull()?.size?.let { cols ->
-            repeat(cols) { colIdx ->
-                selectedColumns.add(defaultIsColumnSelected(colIdx))
-            }
-        }
-        editableValues.clear()
-        repeat(excelData.size) { editableValues.add(mutableListOf(mutableStateOf(""), mutableStateOf(""))) }
-        completeStates.clear()
-        repeat(excelData.size) { completeStates.add(false) }
-    }
-
-    fun defaultIsColumnIncluded(headerKey: String?, headerType: String?): Boolean {
-        val canonicalKey = headerKey
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?.let { canonicalExcelHeaderKey(it) ?: it }
-            ?: return false
-
-        if (canonicalKey in defaultIncludedColumnKeys) return true
-
-        return when (headerType?.trim()) {
-            "alias", "pattern" -> true
-            null, "", "unknown", "generated" -> false
-            else -> true
-        }
-    }
-
-    private fun defaultIsColumnSelected(colIdx: Int): Boolean {
-        val headerKey = excelData.firstOrNull()?.getOrNull(colIdx)
-        val headerType = headerTypes.getOrNull(colIdx)
-        return defaultIsColumnIncluded(headerKey, headerType)
-    }
 
     fun generateFilteredWithOldPrices(supplierName: String, categoryName: String, onResult: (Long) -> Unit) {
         val admission = localReadGate.snapshot()
-        if (!localReadGate.isCurrent(admission)) return
+        if (!localReadGate.isWriteCurrent(admission)) return
+        // Back from a gated business route still shows the pristine raw draft.
+        // A new Generate must use that draft, not the previous History/generated projection.
+        currentHistoryEntryObserverJob?.cancel()
+        currentHistoryEntryObserverJob = null
+        suppressedHistoryEntryObserverReloads.clear()
+        businessProjection.value = null
         // Prima di qualsiasi modifica, salviamo lo stato attuale della griglia.
         _preGenerateStateBackup = excelData.map { it.toList() }
-        _preGenerateOriginalHeadersBackup = originalHeaders.toList()
-        _preGenerateHeaderTypesBackup = headerTypes.toList()
 
         viewModelScope.launch { // Esegui operazioni pesanti su un thread in background
           localReadGate.runIfCurrent(admission) {
@@ -697,46 +508,7 @@ class ExcelViewModel(
         }
     }
 
-    fun getPreGenerateDataQualitySummary(): PreGenerateDataQualitySummary {
-        val header = excelData.firstOrNull() ?: return PreGenerateDataQualitySummary()
-        val barcodeIndex = header.indexOf("barcode")
-        val purchasePriceIndex = header.indexOf("purchasePrice")
-
-        if (barcodeIndex == -1) {
-            return PreGenerateDataQualitySummary()
-        }
-
-        val barcodeOccurrences = LinkedHashMap<String, Int>()
-        var missingPurchasePriceCount = 0
-
-        excelData.drop(1).forEach { row ->
-            val barcode = row.getOrNull(barcodeIndex)?.trim().orEmpty()
-            if (barcode.isBlank()) {
-                return@forEach
-            }
-
-            barcodeOccurrences[barcode] = (barcodeOccurrences[barcode] ?: 0) + 1
-
-            if (purchasePriceIndex != -1) {
-                val purchasePrice = row.getOrNull(purchasePriceIndex)?.trim().orEmpty()
-                if (purchasePrice.isBlank()) {
-                    missingPurchasePriceCount++
-                }
-            }
-        }
-
-        val duplicateBarcodes = barcodeOccurrences
-            .asSequence()
-            .filter { (_, occurrences) -> occurrences > 1 }
-            .map { (barcode, _) -> barcode }
-            .toList()
-
-        return PreGenerateDataQualitySummary(
-            duplicateBarcodeCount = duplicateBarcodes.size,
-            duplicateBarcodeSamples = duplicateBarcodes.take(PRE_GENERATE_DUPLICATE_SAMPLE_LIMIT),
-            missingPurchasePriceCount = missingPurchasePriceCount
-        )
-    }
+    fun getPreGenerateDataQualitySummary(): PreGenerateDataQualitySummary = displayedGrid.getPreGenerateDataQualitySummary()
 
     private suspend fun fetchPreviousPrices(barcodeIdx: Int): Map<String, Pair<Double?, Double?>> {
         val allBarcodesInFile = collectUniqueBarcodes(barcodeIdx)
@@ -843,6 +615,8 @@ class ExcelViewModel(
         onResult: (Long) -> Unit
     ) {
         withContext(Dispatchers.Main) {
+            draft.retirePendingFileRead()
+            businessProjection.value = ExcelImportDraftState(viewModelScope)
             excelData.clear()
             excelData.addAll(filteredData)
             editableValues.clear()
@@ -993,59 +767,30 @@ class ExcelViewModel(
     }
 
     fun resetState() {
+        clearBusinessPresentation()
+        draft.resetState()
+    }
+
+    private fun clearBusinessPresentation() {
         currentHistoryEntryObserverJob?.cancel()
         currentHistoryEntryObserverJob = null
         suppressedHistoryEntryObserverReloads.clear()
-        excelData.clear()
-        originalHeaders.clear()
-        selectedColumns.clear()
-        editableValues.clear()
-        completeStates.clear()
-        errorRowIndexes.value = emptySet()
+        _originalHistoryEntryState = null
+        businessProjection.value = null
         generated.value = false
-        isLoading.value = false
-        loadError.value = null
         currentEntryName.value = ""
         currentEntryFileName.value = ""
         currentSupplierName = ""
         currentCategoryName = ""
-        headerTypes.clear()
         currentEntryStatus.value = Triple(SyncStatus.NOT_ATTEMPTED, false, 0L)
         generatedRouteIsNew = false
         generatedRouteIsManualEntry = false
         importOriginForGeneratedSession = ImportNavOrigin.HOME
     }
 
-    fun setHeaderType(colIdx: Int, type: String?) {
-        if (colIdx in headerTypes.indices) {
-            headerTypes[colIdx] = type ?: "unknown"
-        }
-        val headerRow = excelData.firstOrNull()?.toMutableList()
-        if (headerRow != null && colIdx in headerRow.indices) {
-            if (type != null) {
-                headerRow[colIdx] = type
-                excelData[0] = headerRow
-            }
-        }
-        if (colIdx in selectedColumns.indices) {
-            selectedColumns[colIdx] = isColumnEssential(colIdx) || defaultIsColumnSelected(colIdx)
-        }
-    }
+    fun setHeaderType(colIdx: Int, type: String?) = displayedGrid.setHeaderType(colIdx, type)
 
-    fun restoreOriginalHeader(colIdx: Int) {
-        val originalHeader = originalHeaders.getOrNull(colIdx)?.takeIf { it.isNotBlank() } ?: return
-        if (colIdx in headerTypes.indices) {
-            headerTypes[colIdx] = "unknown"
-        }
-        val headerRow = excelData.firstOrNull()?.toMutableList() ?: return
-        if (colIdx in headerRow.indices) {
-            headerRow[colIdx] = originalHeader
-            excelData[0] = headerRow
-        }
-        if (colIdx in selectedColumns.indices) {
-            selectedColumns[colIdx] = isColumnEssential(colIdx) || defaultIsColumnSelected(colIdx)
-        }
-    }
+    fun restoreOriginalHeader(colIdx: Int) = displayedGrid.restoreOriginalHeader(colIdx)
 
     fun markCurrentEntryAsExported(entryUid: Long) {
         launchHistoryAction(entryUid) { entry, admission ->
@@ -1168,8 +913,10 @@ class ExcelViewModel(
     }
 
     // --- 1. AGGIUNGI UNA FUNZIONE PER CREARE L'ENTRY MANUALE ---
-    fun createManualEntry(context: Context, onResult: (Long) -> Unit){
-        viewModelScope.launch { // Non serve Dispatchers.IO per questa logica
+    fun createManualEntry(context: Context, onResult: (Long) -> Unit) {
+        val admission = localReadGate.snapshot()
+        if (!localReadGate.isWriteCurrent(admission)) return
+        viewModelScope.launch {
             // Definisci l'intestazione standard
             val manualHeader = listOf("barcode", "productName", "purchasePrice", "retailPrice", "quantity", "category")
             val dataGrid = listOf(manualHeader)
@@ -1198,15 +945,13 @@ class ExcelViewModel(
                 wasExported = false
             )
 
-            // Inserisci e ottieni l'UID sul thread IO
-            val newUid = repository.insertHistoryEntry(newEntry)
-
-            // Torna al thread principale per aggiornare lo stato e navigare
-            withContext(Dispatchers.Main) {
-                // 👇 CARICA LA NUOVA ENTRY NELLO STATO DEL VIEWMODEL
-                populateStateFromEntry(newEntry.copy(uid = newUid))
-                onResult(newUid)
-            }
+            val newUid = localReadGate.runIfCurrent(admission) {
+                repository.insertHistoryEntry(newEntry)
+            } ?: return@launch
+            if (newUid <= 0L || !localReadGate.isWriteCurrent(admission)) return@launch
+            clearBusinessPresentation()
+            populateStateFromEntry(newEntry.copy(uid = newUid))
+            onResult(newUid)
         }
     }
 
@@ -1262,6 +1007,15 @@ class ExcelViewModel(
     }
 
     companion object {
+        internal fun sharedDraftFactory(app: Application, repository: InventoryRepository, draft: ExcelImportDraftState): androidx.lifecycle.ViewModelProvider.Factory =
+            object : androidx.lifecycle.ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : androidx.lifecycle.ViewModel> create(modelClass: Class<T>): T {
+                    if (modelClass.isAssignableFrom(ExcelViewModel::class.java)) return ExcelViewModel(app, repository, draft) as T
+                    throw IllegalArgumentException("Unknown ViewModel class")
+                }
+            }
+
         private const val GENERATED_DB_TAG = "GeneratedDbFlow"
 
         fun factory(app: Application, repository: InventoryRepository): androidx.lifecycle.ViewModelProvider.Factory {

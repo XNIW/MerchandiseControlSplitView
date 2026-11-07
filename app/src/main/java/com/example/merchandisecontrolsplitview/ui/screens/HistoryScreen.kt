@@ -2,6 +2,7 @@ package com.example.merchandisecontrolsplitview.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -26,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -33,13 +35,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.merchandisecontrolsplitview.R
 import com.example.merchandisecontrolsplitview.data.HistoryDisplayEntry
+import com.example.merchandisecontrolsplitview.data.HistoryEntry
+import com.example.merchandisecontrolsplitview.data.HistoryEntryListItem
 import com.example.merchandisecontrolsplitview.data.PilotCommitTrace
 import com.example.merchandisecontrolsplitview.ui.MobileSyncInteractionTestHooks
 import com.example.merchandisecontrolsplitview.ui.observeMobileSyncDraw
 import com.example.merchandisecontrolsplitview.data.SyncStatus
 import com.example.merchandisecontrolsplitview.ui.theme.appColors
 import com.example.merchandisecontrolsplitview.ui.theme.appSpacing
+import com.example.merchandisecontrolsplitview.util.calculateTotalQuantityFromRows
 import com.example.merchandisecontrolsplitview.util.formatClCount
+import com.example.merchandisecontrolsplitview.util.formatGridNumericDisplay
+import com.example.merchandisecontrolsplitview.util.getLocalizedHeader
 import com.example.merchandisecontrolsplitview.util.formatClQuantityDisplayReadOnly
 import com.example.merchandisecontrolsplitview.util.formatClSummaryMoney
 import com.example.merchandisecontrolsplitview.viewmodel.DateFilter
@@ -66,7 +73,7 @@ private sealed interface HistoryListRow {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun HistoryScreen(
+internal fun HistoryScreen(
     contentPadding: PaddingValues = PaddingValues(),
     historyList: List<HistoryDisplayEntry>,
     currentFilter: HistoryFilter,
@@ -78,7 +85,8 @@ fun HistoryScreen(
     onRename: (HistoryDisplayEntry, String) -> Unit,
     onDelete: (HistoryDisplayEntry) -> Unit,
     onHistoryActionMessageConsumed: () -> Unit,
-    onSetFilter: (HistoryFilter) -> Unit
+    onSetFilter: (HistoryFilter) -> Unit,
+    canEdit: Boolean = true
 ) {
     val spacing = MaterialTheme.appSpacing
     val currentConfiguration = LocalConfiguration.current
@@ -304,6 +312,7 @@ fun HistoryScreen(
                                     HistoryRow(
                                         entry = entry,
                                         onClick = { onSelect(entry) },
+                                        canEdit = canEdit,
                                         onRenameClick = {
                                             entryToRename = entry
                                             renameText = entry.displayName
@@ -774,11 +783,93 @@ private fun HistoryMonthDivider(label: String) {
     }
 }
 
+/** This route uses only the session bodies already verified and read in one Room snapshot. */
+@Composable
+internal fun QualifiedHistoryScreen(
+    contentPadding: PaddingValues,
+    entries: List<HistoryEntry>,
+    filter: HistoryFilter,
+    dateRange: Pair<String, String>?,
+    onSetFilter: (HistoryFilter) -> Unit
+) {
+    var selection by remember { mutableStateOf<Long?>(null) }
+    val dated = remember(entries, dateRange) {
+        if (dateRange == null) entries else entries.filter { it.timestamp in dateRange.first..dateRange.second }
+    }
+    val displayed = remember(dated, filter.supplier, filter.category) {
+        dated.filter { entry ->
+            (filter.supplier.isBlank() || entry.supplier.equals(filter.supplier, ignoreCase = true)) &&
+                (filter.category.isBlank() || entry.category.equals(filter.category, ignoreCase = true))
+        }.map { entry ->
+            HistoryDisplayEntry(
+                HistoryEntryListItem(entry.uid, entry.id, entry.displayName, entry.timestamp, entry.supplier,
+                    entry.category, entry.wasExported, entry.syncStatus, entry.orderTotal, entry.paymentTotal,
+                    entry.missingItems, entry.totalItems, entry.isManualEntry, entry.deletedAt),
+                calculateTotalQuantityFromRows(entry.data)
+            )
+        }
+    }
+    HistoryScreen(
+        contentPadding = contentPadding, historyList = displayed, currentFilter = filter,
+        hasAnyHistoryEntries = entries.isNotEmpty(), historyActionMessage = null,
+        availableSuppliers = dated.map { it.supplier.trim() }.filter(String::isNotEmpty).distinct().sorted(),
+        availableCategories = dated.map { it.category.trim() }.filter(String::isNotEmpty).distinct().sorted(),
+        onSelect = { selection = it.uid }, onRename = { _, _ -> }, onDelete = {},
+        onHistoryActionMessageConsumed = {}, onSetFilter = onSetFilter, canEdit = false
+    )
+    entries.firstOrNull { it.uid == selection }?.let { entry ->
+        StoredHistoryDetail(entry) { selection = null }
+    }
+}
+
+@Composable
+private fun StoredHistoryDetail(entry: HistoryEntry, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val header = entry.data.firstOrNull().orEmpty()
+    val horizontal = rememberScrollState()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(entry.displayName.ifBlank { stringResource(R.string.history_session_title_fallback_generic) }) },
+        text = {
+            Box(Modifier.fillMaxWidth().horizontalScroll(horizontal)) {
+                LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                    items(entry.data.size) { rowIndex ->
+                        val row = entry.data[rowIndex]
+                        Row {
+                            header.forEachIndexed { column, key ->
+                                val value = if (rowIndex == 0) getLocalizedHeader(context, key)
+                                else when {
+                                    !entry.isManualEntry && header.size >= 3 && column == header.size - 3 ->
+                                        entry.editable.getOrNull(rowIndex)?.getOrNull(0).orEmpty()
+                                    !entry.isManualEntry && header.size >= 3 && column == header.size - 2 ->
+                                        entry.editable.getOrNull(rowIndex)?.getOrNull(1).orEmpty()
+                                    !entry.isManualEntry && header.size >= 3 && column == header.lastIndex ->
+                                        stringResource(if (entry.complete.getOrNull(rowIndex) == true)
+                                            R.string.status_completed else R.string.status_incomplete)
+                                    else -> row.getOrNull(column).orEmpty()
+                                }
+                                Text(
+                                    if (rowIndex == 0) value else formatGridNumericDisplay(value, key),
+                                    modifier = Modifier.width(120.dp).padding(8.dp),
+                                    style = if (rowIndex == 0) MaterialTheme.typography.labelLarge
+                                        else MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) } }
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HistoryRow(
     entry: HistoryDisplayEntry,
     onClick: () -> Unit,
+    canEdit: Boolean,
     onRenameClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
@@ -863,6 +954,8 @@ private fun HistoryRow(
 
     SwipeToDismissBox(
         state = dismissState,
+        enableDismissFromStartToEnd = canEdit,
+        enableDismissFromEndToStart = canEdit,
         backgroundContent = {
             val direction = dismissState.targetValue
             if (direction != SwipeToDismissBoxValue.Settled) {

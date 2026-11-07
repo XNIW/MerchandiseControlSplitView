@@ -171,7 +171,11 @@ class ShopContextRepository(
 ) {
     private val refreshLock = Any()
     private var refreshGeneration = 0L
-    private var writeContextGeneration = 0L
+    private val mutableContextGeneration = MutableStateFlow(0L)
+    private var writeContextGeneration: Long
+        get() = mutableContextGeneration.value
+        set(value) { mutableContextGeneration.value = value }
+    internal val posContextGeneration: StateFlow<Long> = mutableContextGeneration.asStateFlow()
     private val mutableState = MutableStateFlow(ShopContext.legacy())
     val state: StateFlow<ShopContext> = mutableState.asStateFlow()
 

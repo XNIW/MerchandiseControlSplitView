@@ -269,6 +269,35 @@ class SupabaseAuthManager private constructor(
         _localIdentity.value == identity && authGeneration.get() == identity.authGeneration &&
             _state.value !is AuthState.SignedOut && sessionController?.let { !hasUnverifiedCleanupError(it) } == true
 
+    /** One awaited refresh through the existing SDK owner; no identity or auth-state publication. */
+    internal suspend fun refreshSessionForCurrentIdentity(
+        identity: LocalAuthIdentity,
+        isScopeCurrent: () -> Boolean
+    ): Boolean = authMutex.withLock {
+        val controller = sessionController ?: return@withLock false
+        fun ownsCurrentSession(): Boolean = isCurrentLocalIdentity(identity) &&
+            (_state.value as? AuthState.SignedIn)?.userId == identity.userId &&
+            controller.sessionStatus.value is SessionStatus.Authenticated &&
+            controller.currentUserOrNull()?.id == identity.userId && isScopeCurrent()
+        if (!ownsCurrentSession()) return@withLock false
+        val result = controller.refreshStoredSession()
+        result == StoredSessionRefreshResult.Refreshed && ownsCurrentSession()
+    }
+
+    /** DEBUG instrumentation only: serialize its existing SDK import after the old restore. */
+    internal suspend fun withPreflightSessionImport(block: suspend () -> Unit) {
+        check(com.example.merchandisecontrolsplitview.BuildConfig.DEBUG) { "preflight_import_debug_only" }
+        authMutex.withLock {
+            check(sessionController != null && _state.value == AuthState.SignedOut) {
+                "preflight_import_requires_signed_out_owner"
+            }
+            // Retire already queued old bootstrap generations, without clearing SDK storage.
+            // The ordinary restore/validate/publish path must still establish the new identity.
+            invalidateBootstrapRestore()
+            block()
+        }
+    }
+
     /** Mutex single-flight: una sola operazione auth alla volta. */
     private val authMutex = Mutex()
 

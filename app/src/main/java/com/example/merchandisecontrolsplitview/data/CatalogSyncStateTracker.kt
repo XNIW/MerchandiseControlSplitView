@@ -429,6 +429,17 @@ class CatalogSyncStateTracker(
         expectedState: Task126BusinessDataScopeState
     ): Task126LocalPresentationStamp? = businessDataScopeFlightGate.captureLocalPresentationStamp(expectedState)
 
+    internal fun captureLocalReadPresentationStamp(
+        expectedState: Task126BusinessDataScopeState
+    ): Task126LocalPresentationStamp? = businessDataScopeFlightGate.captureLocalReadPresentationStamp(expectedState)
+
+    internal suspend fun <T> withLocalReadFlight(block: suspend () -> T): T =
+        businessDataScopeFlightGate.withLocalReadFlight(block)
+
+    internal suspend fun <T> withDomainQualificationReadFlight(
+        scope: Task126OwnerStoreScope, block: suspend () -> T
+    ): T = businessDataScopeFlightGate.withDomainQualificationReadFlight(scope, block)
+
     internal fun isLocalPresentationStampCurrent(
         stamp: Task126LocalPresentationStamp,
         expectedState: Task126BusinessDataScopeState

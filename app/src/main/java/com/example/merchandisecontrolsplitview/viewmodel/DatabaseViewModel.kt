@@ -465,6 +465,9 @@ class DatabaseViewModel(
                 val old = previous
                 previous = current
                 if (old == null || old == current) return@collect
+                if (old.identity != current.identity || old.owner != current.owner || old.shopId != current.shopId) {
+                    _productDetailsOverrides.value = emptyMap()
+                }
                 // Withdraw only stale actions/results; the draft stays in its editor until a confirmed scope switch.
                 if (draftReviewAuthority != null && draftReviewAuthority != current) {
                     draftProductReviewEpoch += 1
@@ -564,6 +567,20 @@ class DatabaseViewModel(
         .distinctUntilChanged()
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    internal fun observeQualifiedCatalog(
+        key: LocalBusinessPresentationKey,
+        scope: Task126OwnerStoreScope,
+        pageSelection: StateFlow<QualifiedCatalogRequest?>
+    ): Flow<QualifiedCatalogPage?> {
+        val local = repository as? DefaultInventoryRepository ?: return flowOf(null)
+        val requests = combine(appliedProductFilter, pageSelection) { filter, selected ->
+            selected?.takeIf { it.filter == filter } ?: QualifiedCatalogRequest(filter, 0)
+        }.distinctUntilChanged()
+        return local.observeQualifiedCatalog(scope, requests).map { page ->
+            page?.takeIf { localReadGate.snapshot().key == key }
+        }
+    }
+
     val pager = localReadGate.observe(PagingData.empty<ProductWithDetails>()) {
       combine(
         appliedProductFilter,
@@ -593,10 +610,12 @@ class DatabaseViewModel(
                     query = filterStr
                 )
             } else {
-                repository.getProductsWithDetailsPaged(
-                    filterStr,
-                    if (storefrontFilter == StorefrontListFilter.CONFLICT) productIds else null
-                )
+                val filteredIds = if (storefrontFilter == StorefrontListFilter.CONFLICT) productIds else null
+                if (repository is DefaultInventoryRepository) {
+                    repository.getCurrentDetailsPaged(filterStr, filteredIds)
+                } else {
+                    repository.getProductsWithDetailsPaged(filterStr, filteredIds)
+                }
             }
           }
         }.flow
@@ -3582,8 +3601,18 @@ class DatabaseViewModel(
     }
 
     private suspend fun refreshProductDetailsOverridesLocked(productIds: Iterable<Long>) {
+        val admission = localReadGate.snapshot()
         for (productId in productIds.distinct()) {
-            val details = repository.getProductDetailsById(productId)
+            val result = localReadGate.runReadIfCurrent(admission) {
+                val details = if (repository is DefaultInventoryRepository) {
+                    repository.getCurrentProductDetails(productId)
+                } else {
+                    repository.getProductDetailsById(productId)
+                }
+                listOf(details)
+            } ?: return
+            if (!localReadGate.isCurrent(admission)) return
+            val details = result.single()
             _productDetailsOverrides.update { current ->
                 if (details != null) {
                     current.withCappedProductDetailsOverride(productId, details)
@@ -3728,18 +3757,24 @@ class DatabaseViewModel(
 
     suspend fun getSupplierById(id: Long): Supplier? {
         val admission = localReadGate.snapshot()
-        return localReadGate.runIfCurrent(admission) { repository.getSupplierById(id) }
+        return localReadGate.runReadIfCurrent(admission) { repository.getSupplierById(id) }
     }
 
     suspend fun getCategoryById(id: Long): Category? {
         val admission = localReadGate.snapshot()
-        return localReadGate.runIfCurrent(admission) { repository.getCategoryById(id) }
+        return localReadGate.runReadIfCurrent(admission) { repository.getCategoryById(id) }
     }
 
     suspend fun findProductByBarcode(barcode: String): Product? {
         val admission = localReadGate.snapshot()
-        return localReadGate.runIfCurrent(admission) { repository.findProductByBarcode(barcode) }
+        return localReadGate.runReadIfCurrent(admission) { repository.findProductByBarcode(barcode) }
     }
+    internal fun observePriceSummaryForProduct(productId: Long): Flow<ProductPriceSummary?> =
+        localReadGate.observe<ProductPriceSummary?>(null) {
+            if (repository is DefaultInventoryRepository) repository.observePriceSummaryForProduct(productId)
+            else flowOf(null)
+        }
+
     fun getPriceSeries(productId: Long, type: String) =
         localReadGate.observe(emptyList<ProductPrice>()) { repository.getPriceSeries(productId, type) }
 
