@@ -1158,22 +1158,25 @@ class Task103AuthPreflightTest {
 
         val sessionFile = args.getString("task072DSessionFile") ?: args.getString("task072SessionFile")
         // An ordinary foreground Activity drives the SDK's ProcessLifecycleOwner initialization.
-        val scenario = if (sessionFile.isNullOrBlank()) null else
+        val mainActivityPreflight = isEnabled(args.getString("task146MainActivityPreflight")?.lowercase())
+        val scenario = if (sessionFile.isNullOrBlank() && !mainActivityPreflight) null else
             androidx.test.core.app.ActivityScenario.launch(MainActivity::class.java)
         try {
             scenario?.let {
                 check(it.state == androidx.lifecycle.Lifecycle.State.RESUMED) { "Ordinary MainActivity did not resume" }
-                println("TASK146_AUTH_LIFECYCLE main_activity_resumed=true")
+                InstrumentationRegistry.getInstrumentation().sendStatus(0, android.os.Bundle().apply {
+                    putString("auth_lifecycle", "TASK146_AUTH_LIFECYCLE main_activity_resumed=true")
+                })
             }
             val signedIn = signedInState(app) ?: run {
                 if (!sessionFile.isNullOrBlank()) {
                     check(app.authManager.state.value == AuthState.SignedOut) {
                         "Preflight import requires completed ordinary signed-out restore"
                     }
-                    val importedOwner = importTemporarySession(app, sessionFile)
+                    val imported = importTemporarySession(app, sessionFile)
                     app.authManager.restoreSession()
-                    withTimeoutOrNull(15_000) {
-                        app.authManager.state.first { it is AuthState.SignedIn && it.userId == importedOwner }
+                    withTimeoutOrNull((imported.deadlineMS - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0L)) {
+                        app.authManager.state.first { it is AuthState.SignedIn && it.userId == imported.owner }
                     } as? AuthState.SignedIn
                 } else signedInState(app)
             } ?: throw AssertionError("TASK-103 Android auth preflight requires signed-in session")
@@ -1187,12 +1190,12 @@ class Task103AuthPreflightTest {
                 isEnabled(task104Enabled) -> "TASK104_PASS2_ANDROID_AUTH_PREFLIGHT"
                 else -> "TASK103_ANDROID_AUTH_PREFLIGHT"
             }
-            println(
-                "$label " +
+            InstrumentationRegistry.getInstrumentation().sendStatus(0, android.os.Bundle().apply {
+                putString("auth_preflight", "$label " +
                     "project_hash=${task103Hash(BuildConfig.SUPABASE_URL)} " +
                     "owner_hash=${task103Hash(signedIn.userId)} " +
-                    "signed_in=true"
-            )
+                    "signed_in=true")
+            })
             if (args.getString("task144CasPreflightReceipt") == "true") {
                 val owner = app.supabaseClient as? GenerationOwnedSupabaseClient
                 val sdk = owner?.captureClientOrNull()
@@ -1293,10 +1296,12 @@ class Task103AuthPreflightTest {
         return authState as? AuthState.SignedIn
     }
 
+    private data class ImportedSession(val owner: String, val deadlineMS: Long)
+
     private suspend fun importTemporarySession(
         app: MerchandiseControlApplication,
         sessionFilePath: String
-    ): String {
+    ): ImportedSession {
         val file = File(sessionFilePath)
         if (!file.exists()) {
             throw AssertionError("TASK-072D task072DSessionFile does not exist")
@@ -1310,18 +1315,36 @@ class Task103AuthPreflightTest {
         }
 
         var importedOwner: String? = null
+        var deadlineMS = 0L
         app.authManager.withPreflightSessionImport {
-            app.supabaseClient?.auth?.importAuthToken(
+            val owner = app.supabaseClient as? GenerationOwnedSupabaseClient
+                ?: throw AssertionError("Generation-owned Supabase client missing")
+            val sdk = owner.captureClient()
+            val auth = sdk.auth
+            check(auth.sessionStatus.value is SessionStatus.NotAuthenticated) {
+                "Preflight import requires an unauthenticated SDK generation"
+            }
+            auth.importAuthToken(
                 accessToken = access,
                 refreshToken = refresh,
                 retrieveUser = true,
                 autoRefresh = true
-            ) ?: throw AssertionError("Supabase client missing")
-            importedOwner = app.supabaseClient?.auth?.currentUserOrNull()?.id
+            )
+            // Share the original post-import budget with the subsequent manager restore.
+            deadlineMS = android.os.SystemClock.elapsedRealtime() + 15_000
+            check(owner.captureClientOrNull() === sdk) { "Imported SDK generation changed" }
+            // importAuthToken uses expiresIn=0; the SDK starts its real refresh asynchronously.
+            val authenticated = withTimeoutOrNull((deadlineMS - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0L)) {
+                auth.sessionStatus.first { it is SessionStatus.Authenticated }
+            } as? SessionStatus.Authenticated ?: throw AssertionError("Imported SDK authentication did not complete")
+            check(owner.captureClientOrNull() === sdk && auth.sessionStatus.value === authenticated) {
+                "Imported SDK generation or session changed"
+            }
+            importedOwner = authenticated.session.user?.id
                 ?.takeIf { it.isNotBlank() } ?: throw AssertionError("Imported SDK user missing")
         }
         check(file.delete()) { "One-use imported session file was not consumed" }
-        return requireNotNull(importedOwner)
+        return ImportedSession(requireNotNull(importedOwner), deadlineMS)
     }
 
     private fun isEnabled(value: String?): Boolean =
