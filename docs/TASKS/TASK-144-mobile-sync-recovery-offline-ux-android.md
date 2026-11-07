@@ -92,6 +92,25 @@ APK/source/config non allineati per prova, timeout backend non attribuito, cold 
 
 ## Execution / Review / Fix / Chiusura
 
+### Execution — raccordo canonico TASK-146 e integrazione Android — 2026-11-07
+
+**Stato corrente.** TASK-144 resta **BLOCKED, assorbita senza DONE** nella iOS TASK-146 canonica, ACTIVE / EXECUTION, repository iOSMerchandiseControl, file `docs/TASKS/TASK-146-mobile-consolidation-domain-readiness-pos.md` e relativo registro. Le informazioni, i criteri, gli esiti e gli handoff del 16 ottobre presenti sopra e sotto restano snapshot storici; non assegnano una seconda execution Android.
+
+**Override utente e pubblicazione.** Il mandato di consolidamento cross-repository autorizza questo raccordo documentale e la sua pubblicazione tramite PR normale anche con TASK-144 BLOCKED, senza riaprire il task o riscriverne planning e criteri. Il codice Android è integrato con [PR #32](https://github.com/XNIW/MerchandiseControlSplitView/pull/32), merge `d3b82d36179e3fa3f9fc9c80c2e033fcc512d3a7`, da head `382bb819fa69d2f54adeca90f9e1469a579a84e0`. Evidenze applicative e limiti correnti restano nel task canonico e nella PR; questa nota non attribuisce nuovi PASS runtime. L'utente ha differito il solo gate offline OS reale iOS per assenza di dispositivi fisici; il resto dell'esecuzione e dell'integrazione continua. Campagne statistiche DIFFERITE, nessun DONE, produzione o distribuzione client.
+
+**File modificati:** `docs/MASTER-PLAN.md` e questo file, soltanto per il raccordo corrente. Codice applicativo, configurazione, risorse, test e WIP del checkout primario restano preservati.
+
+| Check | Stato | Evidenza / limite |
+|---|---|---|
+| Coerenza con il mandato | ✅ ESEGUITO — STATIC | Fonte canonica TASK-146 unica, assorbimento senza DONE e override esplicito |
+| Perimetro e conservazione | ✅ ESEGUITO — STATIC | Diff limitato ai due documenti; albero del codice identico a main `d3b82d36`; planning, CA e handoff storici conservati |
+| Build, lint e warning locali | ❌ NON ESEGUITO — N/A | Eccezione documentazione/governance di AGENTS.md; nessuna run SDK locale |
+| Gate applicativi | ❌ NON ESEGUITO in questo raccordo | Nessun risultato CI o documentale sostituisce i gate e le prove del task canonico |
+
+**Handoff corrente.** La PR di tracking segue la CI richiesta prima del merge normale. Il coordinatore TASK-146 conserva ownership di execution, review e tracking complessivi. I limiti di pubblicazione dei vecchi incarichi rimangono storici e non revocano questo mandato; nessuna nuova esecuzione di TASK-144 è aperta.
+
+### Snapshot execution del 16 ottobre 2026, preservato
+
 Execution locale conclusa, EXECUTION→REVIEW;accettazioneesternaBLOCKED. Il planning originale noncertificava unarisoluzione: valgono ora igate locali qui registrati e il relativo handoff. TASK-143resta sospeso con prove storiche intatte;nessunDONE.
 
 ### Execution — gate locali 2026-10-16T04:45:41Z
