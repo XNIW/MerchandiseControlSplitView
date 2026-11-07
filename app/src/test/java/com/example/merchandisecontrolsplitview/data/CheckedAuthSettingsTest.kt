@@ -123,6 +123,12 @@ class CheckedAuthSettingsTest {
         var phase = "before_initial_sdk_drain"
         try {
             runCurrent()
+            phase = "await_initial_empty_storage_completion"
+            // The SDK setup and the generation relay are background jobs. Drain their
+            // real empty-storage completion before asking the manager to restore it.
+            owner.auth.awaitInitialization()
+            assertTrue(owner.sessionStatus.first { it !is SessionStatus.Initializing } is SessionStatus.NotAuthenticated)
+            runCurrent()
             phase = "initial_restore_requested"
             manager.restoreSession()
             phase = "await_initial_signed_out"
