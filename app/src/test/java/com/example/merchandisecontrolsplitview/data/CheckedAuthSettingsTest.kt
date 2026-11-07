@@ -19,7 +19,10 @@ import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.logging.LogLevel
 import io.mockk.every
 import io.mockk.mockk
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -119,7 +122,10 @@ class CheckedAuthSettingsTest {
         val old = session()
         val engine = SuspendedRefreshEngine(dispatcher, old)
         val owner = owned(preferences, dispatcher, engine, completeEmptyStorageInitialization = true)
-        val manager = SupabaseAuthManager(owner, "synthetic-google-client", scope = backgroundScope)
+        // SDK storage uses Dispatchers.IO; its real work must not lose to a skipped virtual timeout.
+        val managerJob = SupervisorJob()
+        val manager = SupabaseAuthManager(owner, "synthetic-google-client",
+            scope = CoroutineScope(Dispatchers.IO + managerJob))
         var restarted: SupabaseClient? = null
         var phase = "before_initial_sdk_drain"
         try {
@@ -209,6 +215,7 @@ class CheckedAuthSettingsTest {
                     "refresh_released=${engine.releaseRefresh.isCompleted} " +
                     "failed_commit_count=${preferences.failedCommits}")
             }
+            managerJob.cancel()
             manager.shutdown()
             owner.close()
             restarted?.close()
