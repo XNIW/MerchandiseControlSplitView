@@ -1156,78 +1156,92 @@ class Task103AuthPreflightTest {
             .applicationContext as MerchandiseControlApplication
         require(app.javaClass == MerchandiseControlApplication::class.java)
 
-        val signedIn = signedInState(app) ?: run {
-            val sessionFile = args.getString("task072DSessionFile") ?: args.getString("task072SessionFile")
-            if (!sessionFile.isNullOrBlank()) {
-                val importedOwner = importTemporarySession(app, sessionFile)
-                app.authManager.restoreSession()
-                withTimeoutOrNull(15_000) {
-                    app.authManager.state.first { it is AuthState.SignedIn && it.userId == importedOwner }
-                } as? AuthState.SignedIn
-            } else signedInState(app)
-        } ?: throw AssertionError("TASK-103 Android auth preflight requires signed-in session")
-
-        val ordinaryScopeReady = requireReadyLocalStore(app, signedIn)
-        assertTrue(app.catalogRemoteDataSource.isConfigured)
-        assertTrue(app.productPriceRemoteDataSource.isConfigured)
-
-        val label = when {
-            isEnabled(task112Enabled) -> "TASK112_ANDROID_AUTH_PREFLIGHT"
-            isEnabled(task104Enabled) -> "TASK104_PASS2_ANDROID_AUTH_PREFLIGHT"
-            else -> "TASK103_ANDROID_AUTH_PREFLIGHT"
-        }
-        println(
-            "$label " +
-                "project_hash=${task103Hash(BuildConfig.SUPABASE_URL)} " +
-                "owner_hash=${task103Hash(signedIn.userId)} " +
-                "signed_in=true"
-        )
-        if (args.getString("task144CasPreflightReceipt") == "true") {
-            val owner = app.supabaseClient as? GenerationOwnedSupabaseClient
-            val sdk = owner?.captureClientOrNull()
-            val auth = sdk?.auth?.sessionStatus?.value as? SessionStatus.Authenticated
-            val context = app.shopContextRepository.state.value
-            val selected = context.selectedShop
-            val epoch = app.shopContextRepository.diagnosticShopEpoch()
-            val device = app.deviceInstallIdProvider.currentId
-            fun currentIdentity() = owner != null && sdk != null && auth != null && device != null &&
-                owner.captureClientOrNull() === sdk && app.authManager.state.value == signedIn &&
-                sdk.auth.sessionStatus.value === auth && auth.session.expiresAt > Clock.System.now() + 5.seconds &&
-                sdk.auth.currentUserOrNull()?.id == signedIn.userId && app.shopContextRepository.state.value == context &&
-                app.shopContextRepository.diagnosticShopEpoch() == epoch && context.ownerUserId == signedIn.userId &&
-                !context.isLoading && context.syncAllowed && selected != null &&
-                app.catalogSyncStateTracker.allowsBusinessDataScope(signedIn.userId, selected) &&
-                app.deviceInstallIdProvider.currentId == device
-            val proof = JSONObject().put("kind", "task144_native_session_preflight").put("signed_in", true)
-                .put("runner", InstrumentationRegistry.getInstrumentation().javaClass.name)
-                .put("application", app.javaClass.name)
-                .put("project_sha256", liveHash(BuildConfig.SUPABASE_URL.encodeToByteArray()))
-                .put("owner_sha256", liveHash(signedIn.userId.lowercase().encodeToByteArray()))
-                .put("scope_qualification", "NOT_READY")
-            if (ordinaryScopeReady && selected != null && currentIdentity()) {
-                val b6ScopeHash = liveHash((com.example.merchandisecontrolsplitview.data.task126OwnerHash(signedIn.userId)+"\nshop:"+selected.shopId).encodeToByteArray())
-                proof.put("scope_qualification", "LOCAL_SCOPE_CAPTURED_REMOTE_DEVICE_NOT_CHECKED")
-                    .put("shop_sha256", liveHash(selected.shopId.lowercase().encodeToByteArray()))
-                    .put("device_sha256", liveHash(requireNotNull(device).encodeToByteArray()))
-                    .put("b6_scope_sha256", b6ScopeHash)
-            } else {
-                proof.put("readiness", JSONObject()
-                    .put("scope_ready_within_budget", ordinaryScopeReady)
-                    .put("sdk_authenticated", auth != null)
-                    .put("device_present", device != null)
-                    .put("shop_selected", selected != null)
-                    .put("shop_owner_matches", context.ownerUserId == signedIn.userId)
-                    .put("shop_loading", context.isLoading)
-                    .put("shop_sync_allowed", context.syncAllowed)
-                    .put("cloud_scope_allowed", app.catalogSyncStateTracker.businessDataScopeState.value.allowsCloudSync)
-                    .put("identity_current", currentIdentity()))
+        val sessionFile = args.getString("task072DSessionFile") ?: args.getString("task072SessionFile")
+        // An ordinary foreground Activity drives the SDK's ProcessLifecycleOwner initialization.
+        val scenario = if (sessionFile.isNullOrBlank()) null else
+            androidx.test.core.app.ActivityScenario.launch(MainActivity::class.java)
+        try {
+            scenario?.let {
+                check(it.state == androidx.lifecycle.Lifecycle.State.RESUMED) { "Ordinary MainActivity did not resume" }
+                println("TASK146_AUTH_LIFECYCLE main_activity_resumed=true")
             }
-            if (proof.has("b6_scope_sha256")) require(currentIdentity()) {
-                "Ordinary app session scope changed before receipt"
+            val signedIn = signedInState(app) ?: run {
+                if (!sessionFile.isNullOrBlank()) {
+                    check(app.authManager.state.value == AuthState.SignedOut) {
+                        "Preflight import requires completed ordinary signed-out restore"
+                    }
+                    val importedOwner = importTemporarySession(app, sessionFile)
+                    app.authManager.restoreSession()
+                    withTimeoutOrNull(15_000) {
+                        app.authManager.state.first { it is AuthState.SignedIn && it.userId == importedOwner }
+                    } as? AuthState.SignedIn
+                } else signedInState(app)
+            } ?: throw AssertionError("TASK-103 Android auth preflight requires signed-in session")
+
+            val ordinaryScopeReady = requireReadyLocalStore(app, signedIn)
+            assertTrue(app.catalogRemoteDataSource.isConfigured)
+            assertTrue(app.productPriceRemoteDataSource.isConfigured)
+
+            val label = when {
+                isEnabled(task112Enabled) -> "TASK112_ANDROID_AUTH_PREFLIGHT"
+                isEnabled(task104Enabled) -> "TASK104_PASS2_ANDROID_AUTH_PREFLIGHT"
+                else -> "TASK103_ANDROID_AUTH_PREFLIGHT"
             }
-            InstrumentationRegistry.getInstrumentation().sendStatus(0, android.os.Bundle().apply {
-                putString("TASK144_NATIVE_SESSION_PREFLIGHT", proof.toString())
-            })
+            println(
+                "$label " +
+                    "project_hash=${task103Hash(BuildConfig.SUPABASE_URL)} " +
+                    "owner_hash=${task103Hash(signedIn.userId)} " +
+                    "signed_in=true"
+            )
+            if (args.getString("task144CasPreflightReceipt") == "true") {
+                val owner = app.supabaseClient as? GenerationOwnedSupabaseClient
+                val sdk = owner?.captureClientOrNull()
+                val auth = sdk?.auth?.sessionStatus?.value as? SessionStatus.Authenticated
+                val context = app.shopContextRepository.state.value
+                val selected = context.selectedShop
+                val epoch = app.shopContextRepository.diagnosticShopEpoch()
+                val device = app.deviceInstallIdProvider.currentId
+                fun currentIdentity() = owner != null && sdk != null && auth != null && device != null &&
+                    owner.captureClientOrNull() === sdk && app.authManager.state.value == signedIn &&
+                    sdk.auth.sessionStatus.value === auth && auth.session.expiresAt > Clock.System.now() + 5.seconds &&
+                    sdk.auth.currentUserOrNull()?.id == signedIn.userId && app.shopContextRepository.state.value == context &&
+                    app.shopContextRepository.diagnosticShopEpoch() == epoch && context.ownerUserId == signedIn.userId &&
+                    !context.isLoading && context.syncAllowed && selected != null &&
+                    app.catalogSyncStateTracker.allowsBusinessDataScope(signedIn.userId, selected) &&
+                    app.deviceInstallIdProvider.currentId == device
+                val proof = JSONObject().put("kind", "task144_native_session_preflight").put("signed_in", true)
+                    .put("runner", InstrumentationRegistry.getInstrumentation().javaClass.name)
+                    .put("application", app.javaClass.name)
+                    .put("project_sha256", liveHash(BuildConfig.SUPABASE_URL.encodeToByteArray()))
+                    .put("owner_sha256", liveHash(signedIn.userId.lowercase().encodeToByteArray()))
+                    .put("scope_qualification", "NOT_READY")
+                if (ordinaryScopeReady && selected != null && currentIdentity()) {
+                    val b6ScopeHash = liveHash((com.example.merchandisecontrolsplitview.data.task126OwnerHash(signedIn.userId)+"\nshop:"+selected.shopId).encodeToByteArray())
+                    proof.put("scope_qualification", "LOCAL_SCOPE_CAPTURED_REMOTE_DEVICE_NOT_CHECKED")
+                        .put("shop_sha256", liveHash(selected.shopId.lowercase().encodeToByteArray()))
+                        .put("device_sha256", liveHash(requireNotNull(device).encodeToByteArray()))
+                        .put("b6_scope_sha256", b6ScopeHash)
+                } else {
+                    proof.put("readiness", JSONObject()
+                        .put("scope_ready_within_budget", ordinaryScopeReady)
+                        .put("sdk_authenticated", auth != null)
+                        .put("device_present", device != null)
+                        .put("shop_selected", selected != null)
+                        .put("shop_owner_matches", context.ownerUserId == signedIn.userId)
+                        .put("shop_loading", context.isLoading)
+                        .put("shop_sync_allowed", context.syncAllowed)
+                        .put("cloud_scope_allowed", app.catalogSyncStateTracker.businessDataScopeState.value.allowsCloudSync)
+                        .put("identity_current", currentIdentity()))
+                }
+                if (proof.has("b6_scope_sha256")) require(currentIdentity()) {
+                    "Ordinary app session scope changed before receipt"
+                }
+                InstrumentationRegistry.getInstrumentation().sendStatus(0, android.os.Bundle().apply {
+                    putString("TASK144_NATIVE_SESSION_PREFLIGHT", proof.toString())
+                })
+            }
+        } finally {
+            scenario?.close()
         }
     }
 
