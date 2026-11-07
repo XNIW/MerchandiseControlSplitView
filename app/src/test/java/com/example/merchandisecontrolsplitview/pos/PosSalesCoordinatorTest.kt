@@ -395,6 +395,88 @@ class PosSalesCoordinatorTest {
         f.coordinator.close()
     }
 
+    @Test fun failedDeepHistoryRefreshCanRetryFromTheFirstEnvelopeWithoutLosingTheVisibleAnchor() = runTest {
+        for (failure in listOf("transport", "timeout", "not_found")) {
+            val f = fixture()
+            f.history(listOf(sale(1), sale(2)), cursor(2))
+            f.coordinator.rememberAnchor(id(2))
+            val visible = requireNotNull(f.coordinator.state.value.history)
+            f.coordinator.refreshHistory()
+            advanceTimeBy(2_000)
+            runCurrent()
+            f.transport.calls.last().succeed(data = PosReadData.Overview(listOf(day(net = 2_500)),
+                listOf(sale(3)), cursor(3)))
+            runCurrent()
+            advanceTimeBy(2_000)
+            runCurrent()
+            val deepPage = f.transport.calls.last()
+            assertEquals(PosReadAction.PAGE, deepPage.request.action)
+            assertEquals(cursor(3), deepPage.request.cursor)
+            assertSame(visible, f.coordinator.state.value.history)
+            when (failure) {
+                "transport" -> deepPage.fail(IOException("synthetic deep page"))
+                "not_found" -> deepPage.deny("not_found")
+                else -> {
+                    // The first envelope used two seconds of the original eight-second read budget.
+                    advanceTimeBy(5_999)
+                    runCurrent()
+                    assertEquals(0, deepPage.cancels)
+                    advanceTimeBy(1)
+                    runCurrent()
+                    assertEquals(1, deepPage.cancels)
+                    deepPage.terminal.complete(Unit)
+                }
+            }
+            runCurrent()
+            assertSame(visible, f.coordinator.state.value.history)
+            assertEquals(id(2), f.coordinator.state.value.anchorSaleId)
+            assertFalse(f.coordinator.state.value.refreshing)
+            assertEquals(when (failure) {
+                "timeout" -> "pos_timeout"
+                "not_found" -> "pos_not_found"
+                else -> "pos_unavailable"
+            }, f.coordinator.state.value.errorCode)
+            if (failure == "timeout") {
+                val observation = f.coordinator.observations.value.last()
+                assertEquals(6_000L, requireNotNull(observation.cancellationRequestedAtMs) - observation.startedAtMs)
+                assertTrue(observation.drainedWithinOneSecond)
+            }
+
+            f.coordinator.refreshHistory()
+            runCurrent()
+            val calls = f.transport.calls.size
+            val wait = if (failure == "not_found") 2_000L else 4_000L
+            advanceTimeBy(wait - 1)
+            runCurrent()
+            assertEquals(calls, f.transport.calls.size)
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(calls + 1, f.transport.calls.size)
+            val retry = f.transport.calls.last()
+            assertEquals(PosReadAction.OVERVIEW, retry.request.action)
+            assertEquals(PERIOD, retry.request.period)
+            assertNull(retry.request.cursor)
+            assertSame(visible, f.coordinator.state.value.history)
+            assertEquals(id(2), f.coordinator.state.value.anchorSaleId)
+            val freshTime = PosInstant.parse("2026-11-05T15:00:02.123456Z")
+            retry.succeed(data = PosReadData.Overview(listOf(day(net = 3_000)),
+                listOf(sale(4), sale(2)), null), serverTime = freshTime)
+            runCurrent()
+            val refreshed = requireNotNull(f.coordinator.state.value.history)
+            assertEquals(listOf(id(4), id(2)), refreshed.sales.map { it.id })
+            assertEquals(3_000L, refreshed.summaryDays.single().netRevenueClp)
+            assertEquals(freshTime, refreshed.fetchedAt)
+            assertEquals(id(2), f.coordinator.state.value.anchorSaleId)
+            assertFalse(f.coordinator.state.value.anchorRelocated)
+            assertFalse(f.coordinator.state.value.refreshing)
+            val completedCalls = f.transport.calls.size
+            advanceTimeBy(20_000)
+            runCurrent()
+            assertEquals(completedCalls, f.transport.calls.size)
+            f.coordinator.close()
+        }
+    }
+
     @Test fun firstHistoryRefreshFailureRetainsTheVisibleCopyAndLateScopeResponseCannotReplaceIt() = runTest {
         val f = fixture()
         f.history(listOf(sale(1), sale(2)), cursor(2))

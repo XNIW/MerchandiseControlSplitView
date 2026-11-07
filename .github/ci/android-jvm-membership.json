@@ -5411,6 +5411,10 @@
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "failedDeepHistoryRefreshCanRetryFromTheFirstEnvelopeWithoutLosingTheVisibleAnchor"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
           "name": "filterChangeDiscardsLateOldPageAndItsCursor"
         },
         {
@@ -7630,7 +7634,7 @@
           "name": "visible summaries continue beyond one hundred without duplicate reload"
         }
       ],
-      "total": 1844,
+      "total": 1845,
       "class_count": 111,
       "allowed_skips": [
         {

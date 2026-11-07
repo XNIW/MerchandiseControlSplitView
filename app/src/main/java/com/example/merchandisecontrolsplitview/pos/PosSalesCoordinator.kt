@@ -450,8 +450,11 @@ internal class PosSalesCoordinator(
     private fun publish(flight: Flight, envelope: PosEnvelope) {
         if (envelope is PosEnvelope.Denied) {
             when (envelope.code) {
-                "not_found" -> mutableState.value = mutableState.value.copy(refreshing = false, detail = null,
-                    errorCode = "pos_not_found")
+                "not_found" -> {
+                    rebuild = null
+                    mutableState.value = mutableState.value.copy(refreshing = false, detail = null,
+                        errorCode = "pos_not_found")
+                }
                 "invalid_request" -> transient(PosContractException("pos_invalid_request"))
                 "currency_unsupported" -> {
                     purge(PosAccess.UNAVAILABLE, mutableState.value.route)
@@ -574,6 +577,8 @@ internal class PosSalesCoordinator(
         mutableState.value = mutableState.value.copy(errorCode = code)
     }
     private fun transient(error: Exception) {
+        // A failed current read cannot retain ownership of its unpublished history chain.
+        rebuild = null
         failures++
         val base = listOf(4_000L, 8_000L, 16_000L, 30_000L)[(failures - 1).coerceAtMost(3)]
         val seconds = (error as? PosHttpException)?.retryAfterSeconds?.coerceAtLeast(0) ?: 0
