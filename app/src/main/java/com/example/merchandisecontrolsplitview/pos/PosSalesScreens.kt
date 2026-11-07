@@ -118,6 +118,11 @@ private fun PosHistoryScreen(state: PosSalesState, locale: Locale, coordinator: 
             Column {
                 TextButton(onClick = onBack) { Text(stringResource(R.string.task146_pos_back)) }
                 TextButton(onClick = onMerchandise) { Text(stringResource(R.string.task146_pos_merchandise)) }
+                if (snapshot != null) {
+                    TextButton(onClick = coordinator::refreshHistory, enabled = !state.refreshing) {
+                        Text(stringResource(R.string.task146_pos_refresh))
+                    }
+                }
             }
         }
         item("access") { PosAccessMessage(state, coordinator::retry) }
@@ -158,6 +163,11 @@ private fun PosDetailScreen(state: PosSalesState, locale: Locale, onBack: () -> 
         item("merchandise") { TextButton(onClick = onMerchandise) { Text(stringResource(R.string.task146_pos_merchandise)) } }
         item("access") { PosAccessMessage(state, onRetry) }
         if (detail != null && zone != null) {
+            item("refresh") {
+                TextButton(onClick = onRetry, enabled = !state.refreshing) {
+                    Text(stringResource(R.string.task146_pos_refresh))
+                }
+            }
             state.detailFetchedAt?.let { fetched -> item("fetched") {
                 Text(stringResource(R.string.task146_pos_updated, posTime(fetched, zone, locale), zone))
             } }

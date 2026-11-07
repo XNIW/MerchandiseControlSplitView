@@ -9,6 +9,7 @@
     <string name="task146_pos_filters">Filtros de ventas</string>
     <string name="task146_pos_period_summary">Resumen del período</string>
     <string name="task146_pos_filters_list_only">Los filtros se aplican a la lista; el resumen corresponde al período completo.</string>
+    <string name="task146_pos_refresh">Actualizar</string>
     <string name="task146_pos_new_data">Nuevos datos — Actualizar</string>
     <string name="task146_pos_repositioned">Lista actualizada. La posición anterior no está disponible en la copia cargada; se cambió la posición de la vista.</string>
     <string name="task146_pos_more">Cargar más ventas</string>

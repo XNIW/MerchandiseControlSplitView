@@ -5419,6 +5419,18 @@
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "firstExplicitHistoryRefreshRebuildsTheDeepAnchorWithoutPublishingAnIntermediatePage"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "firstHistoryRefreshFailureRetainsTheVisibleCopyAndLateScopeResponseCannotReplaceIt"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "healthyDetailRefreshRetainsItsIdentityAndVisibleCopyUntilTheAuthorizedResponse"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
           "name": "historyAndDetailsAreNotPolledEveryTwoSeconds"
         },
         {
@@ -7618,7 +7630,7 @@
           "name": "visible summaries continue beyond one hundred without duplicate reload"
         }
       ],
-      "total": 1841,
+      "total": 1844,
       "class_count": 111,
       "allowed_skips": [
         {

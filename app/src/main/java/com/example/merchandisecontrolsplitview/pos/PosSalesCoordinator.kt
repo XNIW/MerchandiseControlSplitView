@@ -140,7 +140,7 @@ internal class PosSalesCoordinator(
     private var optionsBytes = 0L
     private var detailReturnRoute = PosRoute.OVERVIEW
 
-    private enum class Kind { OVERVIEW, HISTORY, STAGE, APPEND, REBUILD, DETAIL, FILTER }
+    private enum class Kind { OVERVIEW, HISTORY, STAGE, REFRESH, APPEND, REBUILD, DETAIL, FILTER }
     private data class Intent(val kind: Kind, val period: PosPeriod? = null,
         val filters: PosFilters = PosFilters(), val cursor: PosCursor? = null,
         val saleId: String? = null, val authRetried: Boolean = false)
@@ -210,6 +210,7 @@ internal class PosSalesCoordinator(
         PosWire.uuid(id)
         if (mutableState.value.access != PosAccess.AVAILABLE || !admitted()) return@synchronized
         detailReturnRoute = if (mutableState.value.route == PosRoute.HISTORY) PosRoute.HISTORY else PosRoute.OVERVIEW
+        rebuild = null
         mutableState.value = mutableState.value.copy(route = PosRoute.DETAIL, selectedSaleId = id, detail = null)
         poll?.cancel(); poll = null; active?.let(::cancel)
         request(Intent(Kind.DETAIL, saleId = id))
@@ -242,23 +243,27 @@ internal class PosSalesCoordinator(
 
     fun openFilters(): Unit = synchronized(lock) {
         val period = historyPeriod ?: return@synchronized
+        rebuild = null
         mutableState.value = mutableState.value.copy(route = PosRoute.FILTER)
         active?.let(::cancel); request(Intent(Kind.FILTER, period))
     }
 
     /** Explicit refresh may replace the deep chain; passive refresh never moves it. */
     fun refreshHistory(): Unit = synchronized(lock) {
+        if (mutableState.value.route != PosRoute.HISTORY || active != null || pending != null || rebuild != null) return@synchronized
+        if (!admitted() || stalled) return@synchronized
         val current = mutableState.value.history
-        val next = staged
-        if (current == null || next == null) {
+        if (current == null) {
             historyPeriod?.let { request(Intent(Kind.HISTORY, it, historyFilters)) }
             return@synchronized
         }
-        staged = null
-        rebuild = Rebuild(mutableState.value.anchorSaleId, mutableState.value.selectedSaleId,
-            current.sales.size, monotonicMs() + 8_000, next)
-        mutableState.value = mutableState.value.copy(refreshing = true, newDataAvailable = false)
-        continueRebuild()
+        val next = staged
+        if (next == null) {
+            // Fetch a fresh first envelope without retiring the currently visible deep chain.
+            request(Intent(Kind.REFRESH, current.period, current.filters))
+        } else {
+            beginHistoryRebuild(current, next, monotonicMs() + 8_000)
+        }
     }
 
     fun retry(): Unit = synchronized(lock) {
@@ -484,7 +489,13 @@ internal class PosSalesCoordinator(
                 val value = PosPeriodSnapshot(period, intent.filters, envelope.currencyCode, envelope.timeZone,
                     data.summaryDays, data.sales.distinctBy { it.id }, data.nextCursor, envelope.serverTime,
                     weight(envelope.bodyBytes, data.sales.size + data.summaryDays.size))
-                if (intent.kind == Kind.STAGE && mutableState.value.history != null) {
+                val currentHistory = mutableState.value.history
+                if (intent.kind == Kind.REFRESH && currentHistory != null) {
+                    if (fits(listOf(value))) {
+                        // The fresh envelope and remaining pages share this read's original budget.
+                        beginHistoryRebuild(currentHistory, value, flight.started + flight.budgetMs)
+                    } else limited()
+                } else if (intent.kind == Kind.STAGE && currentHistory != null) {
                     if (fits(listOf(value))) { staged = value; mutableState.value = mutableState.value.copy(newDataAvailable = true) }
                     else limited()
                 } else if (store(value, visibleSnapshots().filterNot { it.period == period && it.filters == intent.filters })) {
@@ -519,6 +530,14 @@ internal class PosSalesCoordinator(
                 else limited()
             }
         }
+    }
+
+    private fun beginHistoryRebuild(current: PosPeriodSnapshot, next: PosPeriodSnapshot, deadline: Long) {
+        staged = null
+        rebuild = Rebuild(mutableState.value.anchorSaleId, mutableState.value.selectedSaleId,
+            current.sales.size, deadline, next)
+        mutableState.value = mutableState.value.copy(refreshing = true, newDataAvailable = false)
+        continueRebuild()
     }
 
     private fun continueRebuild() {

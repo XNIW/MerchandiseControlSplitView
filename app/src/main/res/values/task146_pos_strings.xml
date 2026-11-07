@@ -9,6 +9,7 @@
     <string name="task146_pos_filters">Filtri vendite</string>
     <string name="task146_pos_period_summary">Riepilogo periodo</string>
     <string name="task146_pos_filters_list_only">I filtri si applicano all’elenco; il riepilogo riguarda il periodo completo.</string>
+    <string name="task146_pos_refresh">Aggiorna</string>
     <string name="task146_pos_new_data">Nuovi dati — Aggiorna</string>
     <string name="task146_pos_repositioned">Elenco aggiornato. La posizione precedente non è disponibile nella copia caricata; visualizzazione riposizionata.</string>
     <string name="task146_pos_more">Carica altre vendite</string>

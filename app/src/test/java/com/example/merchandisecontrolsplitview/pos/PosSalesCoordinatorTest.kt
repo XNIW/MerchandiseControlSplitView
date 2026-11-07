@@ -350,6 +350,139 @@ class PosSalesCoordinatorTest {
         }
     }
 
+    @Test fun firstExplicitHistoryRefreshRebuildsTheDeepAnchorWithoutPublishingAnIntermediatePage() = runTest {
+        val f = fixture()
+        f.history(listOf(sale(1), sale(2)), cursor(2))
+        f.coordinator.rememberAnchor(id(2))
+        val visible = requireNotNull(f.coordinator.state.value.history)
+        val freshTime = PosInstant.parse("2026-11-05T15:00:01.123456Z")
+
+        f.coordinator.refreshHistory()
+        runCurrent()
+        assertFalse(f.coordinator.state.value.newDataAvailable)
+        assertSame(visible, f.coordinator.state.value.history)
+        advanceTimeBy(2_000)
+        runCurrent()
+        val firstPage = f.transport.calls.last()
+        assertEquals(PosReadAction.OVERVIEW, firstPage.request.action)
+        assertEquals(PERIOD, firstPage.request.period)
+        assertNull(firstPage.request.cursor)
+        firstPage.succeed(data = PosReadData.Overview(listOf(day(net = 2_500)), listOf(sale(3)), cursor(3)),
+            serverTime = freshTime)
+        runCurrent()
+        assertSame(visible, f.coordinator.state.value.history)
+        assertEquals(id(2), f.coordinator.state.value.anchorSaleId)
+        assertTrue(f.coordinator.state.value.refreshing)
+
+        advanceTimeBy(2_000)
+        runCurrent()
+        val deepPage = f.transport.calls.last()
+        assertEquals(PosReadAction.PAGE, deepPage.request.action)
+        assertEquals(cursor(3), deepPage.request.cursor)
+        deepPage.succeed(data = PosReadData.Page(listOf(sale(2)), null), serverTime = freshTime)
+        runCurrent()
+        val refreshed = requireNotNull(f.coordinator.state.value.history)
+        assertEquals(listOf(id(3), id(2)), refreshed.sales.map { it.id })
+        assertEquals(2_500L, refreshed.summaryDays.single().netRevenueClp)
+        assertEquals(freshTime, refreshed.fetchedAt)
+        assertEquals(id(2), f.coordinator.state.value.anchorSaleId)
+        assertFalse(f.coordinator.state.value.anchorRelocated)
+        assertFalse(f.coordinator.state.value.refreshing)
+        val calls = f.transport.calls.size
+        advanceTimeBy(20_000)
+        runCurrent()
+        assertEquals(calls, f.transport.calls.size)
+        f.coordinator.close()
+    }
+
+    @Test fun firstHistoryRefreshFailureRetainsTheVisibleCopyAndLateScopeResponseCannotReplaceIt() = runTest {
+        val f = fixture()
+        f.history(listOf(sale(1), sale(2)), cursor(2))
+        f.coordinator.rememberAnchor(id(2))
+        val visible = requireNotNull(f.coordinator.state.value.history)
+        f.coordinator.refreshHistory()
+        advanceTimeBy(2_000)
+        runCurrent()
+        f.transport.calls.last().fail(IOException("synthetic"))
+        runCurrent()
+        assertSame(visible, f.coordinator.state.value.history)
+        assertEquals(id(2), f.coordinator.state.value.anchorSaleId)
+        assertNotNull(f.coordinator.state.value.errorCode)
+
+        f.coordinator.refreshHistory()
+        advanceTimeBy(4_000)
+        runCurrent()
+        val late = f.transport.calls.last()
+        assertEquals(4, f.transport.calls.size)
+        f.current = f.current.copy(authGeneration = 2)
+        f.coordinator.environment(f.current, true, true, PosRoute.HISTORY, true)
+        late.succeed(data = PosReadData.Overview(listOf(day(net = 9_999)), listOf(sale(9)), null))
+        runCurrent()
+        assertNull(f.coordinator.state.value.history)
+        assertNull(f.coordinator.state.value.anchorSaleId)
+        assertFalse(f.coordinator.state.value.newDataAvailable)
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(4, f.transport.calls.size)
+        f.coordinator.close()
+    }
+
+    @Test fun healthyDetailRefreshRetainsItsIdentityAndVisibleCopyUntilTheAuthorizedResponse() = runTest {
+        val f = fixture()
+        f.history(listOf(sale(1), sale(2)), cursor(2))
+        f.coordinator.rememberAnchor(id(2))
+        val oldHistory = requireNotNull(f.coordinator.state.value.history)
+        f.coordinator.refreshHistory()
+        advanceTimeBy(2_000)
+        runCurrent()
+        f.transport.calls.last().succeed(data = PosReadData.Overview(listOf(day()), listOf(sale(3)), cursor(3)))
+        runCurrent()
+        assertSame(oldHistory, f.coordinator.state.value.history)
+        assertTrue(f.coordinator.state.value.refreshing)
+
+        // Navigation cancels the pending rebuild; returning must still allow an explicit refresh.
+        f.coordinator.openDetail(id(2))
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(PosReadAction.DETAIL, f.transport.calls.last().request.action)
+        f.transport.calls.last().succeed(data = PosReadData.Detail(sale(2), emptyList()))
+        runCurrent()
+        val visible = requireNotNull(f.coordinator.state.value.detail)
+        val freshTime = PosInstant.parse("2026-11-05T15:00:01.123456Z")
+
+        f.coordinator.retry()
+        advanceTimeBy(2_000)
+        runCurrent()
+        val refresh = f.transport.calls.last()
+        assertEquals(PosReadAction.DETAIL, refresh.request.action)
+        assertEquals(id(2), refresh.request.saleId)
+        assertSame(visible, f.coordinator.state.value.detail)
+        assertEquals(TIME, f.coordinator.state.value.detailFetchedAt)
+        refresh.succeed(data = PosReadData.Detail(sale(2, 200), emptyList()), serverTime = freshTime)
+        runCurrent()
+        assertEquals(id(2), f.coordinator.state.value.selectedSaleId)
+        assertEquals(200L, f.coordinator.state.value.detail?.sale?.netAmountClp)
+        assertEquals(freshTime, f.coordinator.state.value.detailFetchedAt)
+
+        f.coordinator.closeDetail()
+        advanceTimeBy(2_000)
+        runCurrent()
+        f.transport.calls.last().succeed(data = PosReadData.Overview(listOf(day(net = 2_500)),
+            listOf(sale(3), sale(2)), null), serverTime = freshTime)
+        runCurrent()
+        assertTrue(f.coordinator.state.value.newDataAvailable)
+        f.coordinator.refreshHistory()
+        runCurrent()
+        assertFalse(f.coordinator.state.value.newDataAvailable)
+        assertEquals(listOf(id(3), id(2)), f.coordinator.state.value.history?.sales?.map { it.id })
+        assertEquals(id(2), f.coordinator.state.value.anchorSaleId)
+        val calls = f.transport.calls.size
+        advanceTimeBy(20_000)
+        runCurrent()
+        assertEquals(calls, f.transport.calls.size)
+        f.coordinator.close()
+    }
+
     private fun TestScope.fixture(refresh: suspend (PosScope) -> Boolean = { false }) = Fixture(this, refresh)
     private class Fixture(private val test: TestScope, refresh: suspend (PosScope) -> Boolean) {
         var current = SCOPE
@@ -380,11 +513,12 @@ class PosSalesCoordinatorTest {
         override fun cancel() { cancels++ }
         override suspend fun awaitTerminal() { terminal.await() }
         fun succeed(data: PosReadData = PosReadData.Overview(listOf(day()), emptyList(), null),
-            metadata: Boolean = true, serverPrincipal: String = request.scope.principalId, terminalNow: Boolean = true) {
+            metadata: Boolean = true, serverPrincipal: String = request.scope.principalId, terminalNow: Boolean = true,
+            serverTime: PosInstant = TIME) {
             response.complete(PosEnvelope.Authorized(PosServerScope(serverPrincipal, request.scope.shopId, DEVICE),
                 PosCapability(true, metadata), request.action,
                 if (request.action == PosReadAction.DETAIL) null else request.period ?: PERIOD,
-                "CLP", "America/Santiago", TIME, data, 1024)); if (terminalNow) terminal.complete(Unit)
+                "CLP", "America/Santiago", serverTime, data, 1024)); if (terminalNow) terminal.complete(Unit)
         }
         fun deny(code: String) { response.complete(PosEnvelope.Denied(code, TIME)); terminal.complete(Unit) }
         fun fail(error: Exception) { response.completeExceptionally(error); terminal.complete(Unit) }

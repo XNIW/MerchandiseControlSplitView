@@ -9,6 +9,7 @@
     <string name="task146_pos_filters">销售筛选</string>
     <string name="task146_pos_period_summary">期间汇总</string>
     <string name="task146_pos_filters_list_only">筛选仅作用于列表；汇总涵盖整个期间。</string>
+    <string name="task146_pos_refresh">刷新</string>
     <string name="task146_pos_new_data">有新数据 — 刷新</string>
     <string name="task146_pos_repositioned">列表已刷新。已加载副本中没有原位置，视图已重新定位。</string>
     <string name="task146_pos_more">加载更多销售</string>
