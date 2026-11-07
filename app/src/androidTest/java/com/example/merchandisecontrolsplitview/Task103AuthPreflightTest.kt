@@ -1159,9 +1159,12 @@ class Task103AuthPreflightTest {
         val signedIn = signedInState(app) ?: run {
             val sessionFile = args.getString("task072DSessionFile") ?: args.getString("task072SessionFile")
             if (!sessionFile.isNullOrBlank()) {
-                importTemporarySession(app, sessionFile)
-            }
-            signedInState(app)
+                val importedOwner = importTemporarySession(app, sessionFile)
+                app.authManager.restoreSession()
+                withTimeoutOrNull(15_000) {
+                    app.authManager.state.first { it is AuthState.SignedIn && it.userId == importedOwner }
+                } as? AuthState.SignedIn
+            } else signedInState(app)
         } ?: throw AssertionError("TASK-103 Android auth preflight requires signed-in session")
 
         val ordinaryScopeReady = requireReadyLocalStore(app, signedIn)
@@ -1279,7 +1282,7 @@ class Task103AuthPreflightTest {
     private suspend fun importTemporarySession(
         app: MerchandiseControlApplication,
         sessionFilePath: String
-    ) {
+    ): String {
         val file = File(sessionFilePath)
         if (!file.exists()) {
             throw AssertionError("TASK-072D task072DSessionFile does not exist")
@@ -1292,13 +1295,19 @@ class Task103AuthPreflightTest {
             throw AssertionError("TASK-072D task072DSessionFile is malformed")
         }
 
-        app.supabaseClient?.auth?.importAuthToken(
-            accessToken = access,
-            refreshToken = refresh,
-            retrieveUser = true,
-            autoRefresh = true
-        ) ?: throw AssertionError("Supabase client missing")
-        file.delete()
+        var importedOwner: String? = null
+        app.authManager.withPreflightSessionImport {
+            app.supabaseClient?.auth?.importAuthToken(
+                accessToken = access,
+                refreshToken = refresh,
+                retrieveUser = true,
+                autoRefresh = true
+            ) ?: throw AssertionError("Supabase client missing")
+            importedOwner = app.supabaseClient?.auth?.currentUserOrNull()?.id
+                ?.takeIf { it.isNotBlank() } ?: throw AssertionError("Imported SDK user missing")
+        }
+        check(file.delete()) { "One-use imported session file was not consumed" }
+        return requireNotNull(importedOwner)
     }
 
     private fun isEnabled(value: String?): Boolean =

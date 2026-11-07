@@ -284,6 +284,20 @@ class SupabaseAuthManager private constructor(
         result == StoredSessionRefreshResult.Refreshed && ownsCurrentSession()
     }
 
+    /** DEBUG instrumentation only: serialize its existing SDK import after the old restore. */
+    internal suspend fun withPreflightSessionImport(block: suspend () -> Unit) {
+        check(com.example.merchandisecontrolsplitview.BuildConfig.DEBUG) { "preflight_import_debug_only" }
+        authMutex.withLock {
+            check(sessionController != null && _state.value == AuthState.SignedOut) {
+                "preflight_import_requires_signed_out_owner"
+            }
+            // Retire already queued old bootstrap generations, without clearing SDK storage.
+            // The ordinary restore/validate/publish path must still establish the new identity.
+            invalidateBootstrapRestore()
+            block()
+        }
+    }
+
     /** Mutex single-flight: una sola operazione auth alla volta. */
     private val authMutex = Mutex()
 
