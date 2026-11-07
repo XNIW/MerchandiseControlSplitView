@@ -34,6 +34,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.shadows.ShadowLog
 import org.robolectric.annotation.Config
 import kotlin.time.Clock
 import kotlin.time.Duration.Companion.days
@@ -131,6 +132,7 @@ class CheckedAuthSettingsTest {
             runCurrent()
             phase = "initial_restore_requested"
             manager.restoreSession()
+            runCurrent()
             phase = "await_initial_signed_out"
             manager.state.first { it == AuthState.SignedOut }
             phase = "failed_commit_import"
@@ -170,6 +172,33 @@ class CheckedAuthSettingsTest {
         } finally {
             // Static phase and booleans only; never alter the original failure or reveal a session.
             runCatching {
+                // Map only known static restore messages; SDK/provider text is never printed.
+                val restoreTrace = ShadowLog.getLogsForTag("SupabaseAuth").mapNotNull { item ->
+                    val category = when {
+                        item.msg == "restoreSession: disabled, going SignedOut" -> "disabled"
+                        item.msg == "restoreSession: mutex already locked, skipping" -> "mutex_busy"
+                        item.msg == "restoreSession: waiting for session status (timeout 10000ms)" -> "entered"
+                        item.msg == "restoreSession: got status=NotAuthenticated" -> "status_not_authenticated"
+                        item.msg == "restoreSession: got status=Initializing" -> "status_initializing"
+                        item.msg == "restoreSession: got status=Authenticated" -> "status_authenticated"
+                        item.msg == "restoreSession: got status=Timeout" -> "status_timeout"
+                        item.msg == "restoreSession: got status=RefreshFailure" -> "status_refresh_failure"
+                        item.msg == "Nessuna sessione valida al bootstrap (status=NotAuthenticated)" -> "signed_out_branch"
+                        item.msg == "Restore sessione fallito" -> "restore_exception"
+                        else -> null
+                    }
+                    category?.let { label ->
+                        val errorClass = when (item.throwable) {
+                            null -> "none"
+                            is kotlinx.coroutines.CancellationException -> "cancellation"
+                            is IllegalStateException -> "illegal_state"
+                            is java.io.IOException -> "io"
+                            else -> "other"
+                        }
+                        "$label:$errorClass"
+                    }
+                }
+                println("checked_auth_restore_trace=${restoreTrace.joinToString(",")}")
                 println("checked_auth_save_commit phase=$phase " +
                     "sdk_initializing=${owner.sessionStatus.value is SessionStatus.Initializing} " +
                     "sdk_authenticated=${owner.sessionStatus.value is SessionStatus.Authenticated} " +
