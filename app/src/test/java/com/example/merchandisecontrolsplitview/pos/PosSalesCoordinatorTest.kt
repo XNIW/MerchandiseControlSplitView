@@ -249,12 +249,113 @@ class PosSalesCoordinatorTest {
         assertEquals("0.12345678901234567890123456789", posQuantity(value, Locale.US))
     }
 
-    private fun TestScope.fixture() = Fixture(this)
-    private class Fixture(private val test: TestScope) {
+    @Test fun first401KeepsReadOwnershipUntilOwnerRefreshCompletesAndSecond401StopsPolling() = runTest {
+        val release = CompletableDeferred<Boolean>()
+        var refreshes = 0
+        val f = fixture { scope -> assertEquals(SCOPE, scope); refreshes++; release.await() }
+        f.enter(); runCurrent()
+        advanceTimeBy(1_500); runCurrent()
+        f.transport.calls.single().fail(PosHttpException(401, null)); runCurrent()
+        assertEquals(1, refreshes)
+        assertEquals(PosAccess.VERIFYING, f.coordinator.state.value.access)
+        advanceTimeBy(500); runCurrent() // The ordinary t=2s tick cannot start during refresh.
+        assertEquals(1, f.transport.calls.size)
+        advanceTimeBy(250); runCurrent()
+        release.complete(true); runCurrent()
+        assertEquals(2, f.transport.calls.size)
+        assertEquals(SCOPE, f.transport.calls.last().request.scope)
+        f.transport.calls.last().fail(PosHttpException(401, null)); runCurrent()
+        assertEquals(1, refreshes)
+        assertEquals(PosAccess.DENIED, f.coordinator.state.value.access)
+        assertNull(f.coordinator.state.value.overview)
+        advanceTimeBy(20_000); runCurrent()
+        assertEquals(2, f.transport.calls.size)
+    }
+
+    @Test fun queued401RetryKeepsItsOnceFlagWhenTheOverviewTickMeetsTheTwoSecondCadence() = runTest {
+        var refreshes = 0
+        val f = fixture { refreshes++; true }
+        f.enter(); runCurrent()
+        advanceTimeBy(250); runCurrent()
+        f.transport.calls.single().deny("unauthenticated"); runCurrent()
+        assertEquals(1, refreshes)
+        advanceTimeBy(1_750); runCurrent() // Poll was scheduled before the delayed retry pump.
+        assertEquals(2, f.transport.calls.size)
+        f.transport.calls.last().deny("unauthenticated"); runCurrent()
+        assertEquals(1, refreshes)
+        assertEquals(PosAccess.DENIED, f.coordinator.state.value.access)
+        advanceTimeBy(20_000); runCurrent()
+        assertEquals(2, f.transport.calls.size)
+    }
+
+    @Test fun scopeReplacementCancelsHeld401RefreshAndNeverRetriesThePriorAuthority() = runTest {
+        val release = CompletableDeferred<Boolean>()
+        var refreshes = 0
+        val f = fixture { refreshes++; release.await() }
+        f.enter(); runCurrent()
+        f.transport.calls.single().fail(PosHttpException(401, null)); runCurrent()
+        f.current = f.current.copy(authGeneration = 2)
+        f.enter(); runCurrent()
+        release.complete(true); runCurrent()
+        advanceTimeBy(2_000); runCurrent()
+        assertEquals(1, refreshes)
+        assertEquals(2, f.transport.calls.size)
+        assertEquals(f.current, f.transport.calls.last().request.scope)
+        assertNull(f.coordinator.state.value.overview)
+        f.transport.calls.last().succeed(); runCurrent()
+        assertEquals(PosAccess.AVAILABLE, f.coordinator.state.value.access)
+    }
+
+    @Test fun successful401RefreshRestoresOnlyTheRequestedDetailIdentityBeforeItsAuthorizedRead() = runTest {
+        var refreshes = 0
+        val f = fixture { refreshes++; true }
+        f.ready(listOf(sale(1)))
+        f.coordinator.openDetail(id(1)); advanceTimeBy(2_000); runCurrent()
+        f.transport.calls.last().fail(PosHttpException(401, null)); runCurrent()
+        assertNull(f.coordinator.state.value.detail)
+        advanceTimeBy(2_000); runCurrent()
+        val retry = f.transport.calls.last()
+        assertEquals(3, f.transport.calls.size)
+        assertEquals(PosReadAction.DETAIL, retry.request.action)
+        assertEquals(id(1), retry.request.saleId)
+        retry.succeed(data = PosReadData.Detail(sale(1), emptyList())); runCurrent()
+        assertEquals(1, refreshes)
+        assertEquals(id(1), f.coordinator.state.value.detail?.sale?.id)
+        assertEquals(id(1), f.coordinator.state.value.selectedSaleId)
+        f.coordinator.close()
+    }
+
+    @Test fun pageAndFilter401RefreshRestartAnAuthorizedFirstEnvelopeWithoutTheRetiredCursor() = runTest {
+        for (fromFilter in listOf(false, true)) {
+            var refreshes = 0
+            val f = fixture { refreshes++; true }
+            f.history(listOf(sale(3)), cursor(3))
+            if (fromFilter) f.coordinator.openFilters() else f.coordinator.loadMore()
+            advanceTimeBy(2_000); runCurrent()
+            assertEquals(if (fromFilter) PosReadAction.FILTER else PosReadAction.PAGE,
+                f.transport.calls.last().request.action)
+            f.transport.calls.last().fail(PosHttpException(401, null)); runCurrent()
+            assertNull(f.coordinator.state.value.history)
+            advanceTimeBy(2_000); runCurrent()
+            val retry = f.transport.calls.last()
+            assertEquals(4, f.transport.calls.size)
+            assertEquals(PosReadAction.OVERVIEW, retry.request.action)
+            assertEquals(PERIOD, retry.request.period)
+            assertNull(retry.request.cursor)
+            retry.succeed(data = PosReadData.Overview(listOf(day()), listOf(sale(9)), null)); runCurrent()
+            assertEquals(1, refreshes)
+            assertEquals(PosRoute.HISTORY, f.coordinator.state.value.route)
+            assertEquals(listOf(id(9)), f.coordinator.state.value.history?.sales?.map { it.id })
+            f.coordinator.close()
+        }
+    }
+
+    private fun TestScope.fixture(refresh: suspend (PosScope) -> Boolean = { false }) = Fixture(this, refresh)
+    private class Fixture(private val test: TestScope, refresh: suspend (PosScope) -> Boolean) {
         var current = SCOPE
         val transport = FakeTransport()
         val coordinator = PosSalesCoordinator(test.backgroundScope, transport, { it == current },
-            monotonicMs = { test.testScheduler.currentTime }, jitter = { 0 })
+            monotonicMs = { test.testScheduler.currentTime }, jitter = { 0 }, refreshExistingAuthOnce = refresh)
         fun enter() = coordinator.environment(current, true, true, PosRoute.OVERVIEW, true)
         fun ready(sales: List<PosSale> = emptyList()) {
             enter(); test.runCurrent(); transport.calls.single().succeed(data = PosReadData.Overview(listOf(day()), sales, null)); test.runCurrent()

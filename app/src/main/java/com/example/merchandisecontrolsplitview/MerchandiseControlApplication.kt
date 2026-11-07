@@ -581,7 +581,12 @@ open class MerchandiseControlApplication : Application() {
         }
         val credentials = SupabasePosCredentialSource({ supabaseClient }, isCurrent)
         val transport = OkHttpPosReadTransport(credentials, isCurrent, OkHttpClient())
-        PosSalesViewModel.factory(PosFeatureBindings(transport, isCurrent))
+        PosSalesViewModel.factory(PosFeatureBindings(transport, isCurrent,
+            refreshExistingAuthOnce = { scope ->
+                authManager.refreshSessionForCurrentIdentity(
+                    com.example.merchandisecontrolsplitview.data.LocalAuthIdentity(scope.principalId, scope.authGeneration)
+                ) { isCurrent(scope) } && isCurrent(scope)
+            }))
     }
 
     /** Transport PostgREST backup sessioni history / `shared_sheet_sessions` (task 023). */

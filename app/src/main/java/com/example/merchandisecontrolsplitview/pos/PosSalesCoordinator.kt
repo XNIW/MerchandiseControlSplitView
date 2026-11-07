@@ -374,7 +374,6 @@ internal class PosSalesCoordinator(
                     purge(PosAccess.STALLED, mutableState.value.route)
                     mutableState.value = mutableState.value.copy(errorCode = "pos_transport_stalled")
                 } else {
-                    if (active === flight) active = null
                     if (current(flight)) {
                         // Publication, decoding and the observed terminal all belong to the total read deadline.
                         if (monotonicMs() - flight.started > deadline) {
@@ -393,7 +392,12 @@ internal class PosSalesCoordinator(
                             }
                         }
                     }
-                    if (!authRetry) schedule()
+                    // A 401 refresh is still owned by this same logical read. Route/scope
+                    // cancellation must reach it and polling must not start a competing read.
+                    if (!authRetry) {
+                        if (active === flight) active = null
+                        schedule()
+                    }
                 }
             }
             if (!drained) {
@@ -408,10 +412,29 @@ internal class PosSalesCoordinator(
             val refreshed = try { withTimeout(1_000) { refreshExistingAuthOnce(flight.scope) } }
                 catch (_: Exception) { false }
             synchronized(lock) {
+                if (active === flight) active = null
                 if (current(flight)) {
-                    if (refreshed) request(flight.intent.copy(authRetried = true))
-                    else deny("unauthenticated")
+                    if (refreshed) {
+                        // The 401 purged financial state. A deep-page cursor has no
+                        // retained base; reauthorize a first envelope for that period.
+                        val retry = when (flight.intent.kind) {
+                            Kind.APPEND, Kind.REBUILD -> Intent(Kind.HISTORY,
+                                flight.intent.period, flight.intent.filters, authRetried = true)
+                            Kind.FILTER -> {
+                                mutableState.value = mutableState.value.copy(route = PosRoute.HISTORY)
+                                Intent(Kind.HISTORY, flight.intent.period, historyFilters, authRetried = true)
+                            }
+                            else -> flight.intent.copy(authRetried = true)
+                        }
+                        if (retry.kind == Kind.DETAIL) {
+                            mutableState.value = mutableState.value.copy(selectedSaleId = retry.saleId)
+                        }
+                        request(retry)
+                    } else deny("unauthenticated")
                 }
+                // A canceled old refresh may only release its own flight, then admit
+                // a separately captured current intent. It cannot publish its old scope.
+                schedule()
             }
         }
     }
@@ -553,7 +576,7 @@ internal class PosSalesCoordinator(
                 synchronized(lock) {
                     if (!admitted() || mutableState.value.route != PosRoute.OVERVIEW || stalled) return@launch
                     // Lost ticks are discarded, never queued behind a live transport.
-                    if (active == null) request(Intent(Kind.OVERVIEW))
+                    if (active == null && pending == null) request(Intent(Kind.OVERVIEW))
                 }
                 do { next += 2_000 + jitter(250) } while (next <= monotonicMs())
             }

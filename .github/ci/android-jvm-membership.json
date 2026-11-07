@@ -4567,6 +4567,10 @@
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+          "name": "current identity refresh awaits the existing owner and rejects stale or withdrawn ingress"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
           "name": "definitively rejected session cannot recover from a late authenticated event"
         },
         {
@@ -4595,11 +4599,19 @@
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+          "name": "logout fences a suspended owner refresh without resurrecting signed in identity"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
           "name": "logout request fences invalid bootstrap result while validation holds auth mutex"
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
           "name": "only canonical revocation codes invalidate a stored session"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
+          "name": "owner refresh cannot grant a shop scope withdrawn while the SDK is suspended"
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.data.SupabaseAuthManagerTest",
@@ -5399,6 +5411,10 @@
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "first401KeepsReadOwnershipUntilOwnerRefreshCompletesAndSecond401StopsPolling"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
           "name": "historyAndDetailsAreNotPolledEveryTwoSeconds"
         },
         {
@@ -5423,6 +5439,10 @@
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "pageAndFilter401RefreshRestartAnAuthorizedFirstEnvelopeWithoutTheRetiredCursor"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
           "name": "passiveHistoryRefreshStagesDataWithoutChangingTheVisibleAnchor"
         },
         {
@@ -5432,6 +5452,10 @@
         {
           "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
           "name": "principalMismatchCannotPublishEvenAWellFormedFinancialDto"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "queued401RetryKeepsItsOnceFlagWhenTheOverviewTickMeetsTheTwoSecondCadence"
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
@@ -5451,7 +5475,15 @@
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "scopeReplacementCancelsHeld401RefreshAndNeverRetriesThePriorAuthority"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
           "name": "stableDenialPurgesAndStopsPolling"
+        },
+        {
+          "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
+          "name": "successful401RefreshRestoresOnlyTheRequestedDetailIdentityBeforeItsAuthorizedRead"
         },
         {
           "classname": "com.example.merchandisecontrolsplitview.pos.PosSalesCoordinatorTest",
@@ -7582,7 +7614,7 @@
           "name": "visible summaries continue beyond one hundred without duplicate reload"
         }
       ],
-      "total": 1832,
+      "total": 1840,
       "class_count": 111,
       "allowed_skips": [
         {

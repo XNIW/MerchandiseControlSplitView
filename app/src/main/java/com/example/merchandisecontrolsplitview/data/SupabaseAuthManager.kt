@@ -269,6 +269,21 @@ class SupabaseAuthManager private constructor(
         _localIdentity.value == identity && authGeneration.get() == identity.authGeneration &&
             _state.value !is AuthState.SignedOut && sessionController?.let { !hasUnverifiedCleanupError(it) } == true
 
+    /** One awaited refresh through the existing SDK owner; no identity or auth-state publication. */
+    internal suspend fun refreshSessionForCurrentIdentity(
+        identity: LocalAuthIdentity,
+        isScopeCurrent: () -> Boolean
+    ): Boolean = authMutex.withLock {
+        val controller = sessionController ?: return@withLock false
+        fun ownsCurrentSession(): Boolean = isCurrentLocalIdentity(identity) &&
+            (_state.value as? AuthState.SignedIn)?.userId == identity.userId &&
+            controller.sessionStatus.value is SessionStatus.Authenticated &&
+            controller.currentUserOrNull()?.id == identity.userId && isScopeCurrent()
+        if (!ownsCurrentSession()) return@withLock false
+        val result = controller.refreshStoredSession()
+        result == StoredSessionRefreshResult.Refreshed && ownsCurrentSession()
+    }
+
     /** Mutex single-flight: una sola operazione auth alla volta. */
     private val authMutex = Mutex()
 
