@@ -313,3 +313,17 @@ Un prodotto necessario al prossimo test non è eliminabile solo perché la compi
 ### Resoconto
 
 Distinguere dimensione logica del lotto, blocchi allocati e spazio libero effettivo prima/dopo sul volume. Riportare separatamente il contributo verificato della propria pulizia e le variazioni dovute ad altre sessioni: blocchi allocati e variazione APFS non provano da soli lo spazio fisico esclusivo recuperato. Indicare gli elementi mantenuti con motivo e condizione di rilascio e il budget del prossimo batch.
+
+## Dispositivi locali canonici e rilascio delle risorse
+
+Preferenza utente del 2026-11-11, valida anche per le esecuzioni successive:
+
+- iOS Simulator: **iPhone 15 Pro Max** esistente, UDID `459C668B-7CE8-443B-BAB3-7D3D5FFC9143`, runtime attuale iOS 26.1.
+- iOS fisico: **iPhone di Min**, UDID `00008130-001644523A2A001C`, soltanto quando disponibile e pertinente. I test fisici differiti restano differiti.
+- Android: **Medium Phone API 35**, AVD `Medium_Phone_API_35`, registry `~/.android/avd/Medium_Phone_API_35.ini`, dati `~/.android/avd/Medium_Phone.avd`. Il seriale osservato `emulator-5554` è di sessione: risolverlo tramite identità AVD, senza assumerlo stabile.
+
+Non creare/clonare target per task, retry o agente, né come fallback di lookup/boot. In caso di identità ambigua, target mancante o runtime incompatibile, fermare quel batch con errore esplicito. Una versione richiesta dal test resta vincolante; i target effimeri CI ospitati sono distinti. Un target locale eccezionale richiede motivo concreto, proprietario, dipendenze e condizione di rimozione nel registro.
+
+Serializzare installazioni/test sul medesimo dispositivo con l'esclusione esistente; non concorrere con sessioni manuali dell'utente. Gli helper nativi condividono il lock di piattaforma fra task e rilasciano le proprie risorse tramite il postflight anche per errore/annullamento. Non effettuare erase, wipe, uninstall distruttivi o reset sui canonici; non spegnere un dispositivo preesistente per il solo cleanup.
+
+Prima di ritirare target/snapshot: verificarne proprietario, processi, dati unici e dipendenze; usare gli strumenti ufficiali e preservare solo il contenuto utile necessario, senza archivi integrali di ogni VM. Valutare runtime/system image separatamente. I tre QCOW2 contenenti dati/sessioni restano protetti finché non ne siano dimostrate superfluità e recuperabilità. Nel postflight registrare dispositivi conservati, temporanei rimossi/protetti con motivo e spazio effettivo prima/dopo.
